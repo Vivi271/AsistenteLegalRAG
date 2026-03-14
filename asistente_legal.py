@@ -5,7 +5,7 @@ from google.genai import types
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
-load_dotenv()
+load_dotenv(override=True)
 
 # Configurar Cliente
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
