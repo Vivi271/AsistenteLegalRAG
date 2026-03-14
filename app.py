@@ -33,7 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Carga de configuración
-load_dotenv()
+load_dotenv(override=True)
 if not os.getenv("GEMINI_API_KEY"):
     st.error("Error: GEMINI_API_KEY no configurada en .env")
     st.stop()
