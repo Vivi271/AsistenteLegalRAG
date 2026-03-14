@@ -32,7 +32,7 @@ graph TD
 ## 🛠️ Tecnologías Utilizadas
 
 *   **Core:** Python 3.9+
-*   **IA:** Google Gemini 1.5 / 2.0 (vía SDK `google-genai`)
+*   **IA:** Google Gemini 3 Flash (vía SDK `google-genai`)
 *   **Frontend:** Streamlit (Custom CSS para diseño premium)
 *   **Documentación:** `pypdf` (Motor de extracción de PDF)
 *   **Entorno:** `python-dotenv` para gestión de API Keys seguras.
@@ -87,7 +87,7 @@ Este sistema implementa las 4 estrategias clave de Prompt Engineering exigidas:
 
 ## 📝 Notas de Versión
 *   **v1.0 (Avance 1):** Implementación de arquitectura RAG, motor de PDF y técnica de Few-Shot.
-*   **Modelo optimizado:** `gemini-1.5-flash` para velocidad y precisión en recuperación de datos.
+*   **Modelo optimizado:** `gemini-3-flash-preview` para velocidad y precisión en recuperación de datos.
 
 ---
 © 2026 - Proyecto Académico Konrad Lorenz
