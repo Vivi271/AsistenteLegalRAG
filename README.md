@@ -8,24 +8,18 @@ Este proyecto es un asistente experto diseñado para analizar reglamentos, contr
 
 ---
 
-## 🏗️ Arquitectura del Sistema (RAG Flow)
+## 🏗️ Arquitectura del Sistema (RAG Flow - Avance 2)
 
-El flujo de información garantiza que la inteligencia artificial esté "anclada" (grounded) al documento legal subido:
+El flujo de información se implementó utilizando LangChain y ChromaDB para operar de manera local y privada, garantizando la precisión de las respuestas:
 
-```mermaid
-graph TD
-    A[Usuario] -->|Sube PDF / Pega Texto| B(Extracción de Conocimiento)
-    A -->|Realiza Consulta| C(Inyección de Caso)
-    B -->|Texto Limpio| D[Agente RAG]
-    C -->|Consulta Usuario| D
-    D -->|Instrucción de Sistema| E[Prompt Engineering]
-    D -->|Few-Shot Examples| E
-    D -->|XML Delimiters| E
-    E -->|Contexto Seguro| F[Google Gemini 3 Flash]
-    F -->|JSON Estructurado| G[Procesador de Respuesta]
-    G -->|Interfaz Visual| H[Streamlit UI]
-    H -->|Botón Descarga| I[Reporte Legal .txt]
-```
+1. **Carga de Documentos:** Se extrae el texto de archivos PDF (Reglamentos, manuales o leyes) usando `PyPDFLoader`.
+2. **División en Fragmentos (Chunking):** El texto extraído se divide en pequeños fragmentos de 500 caracteres (con un solapamiento de 50) usando `RecursiveCharacterTextSplitter`.
+3. **Vectorización (Embeddings):** Cada fragmento se convierte en un vector numérico multidimensional utilizando el modelo `gemini-embedding-001`.
+4. **Almacenamiento Local:** Estos vectores se guardan en una base de datos vectorial local basada en **ChromaDB**.
+5. **Recuperación (Retrieval):** Ante una consulta del usuario, el sistema vectoriza la pregunta y extrae de ChromaDB los `k=5` fragmentos semánticamente más similares.
+6. **Prompt Aumentado:** El sistema construye un prompt estricto donde los fragmentos recuperados se inyectan como el *único* contexto permitido.
+7. **Generación Segura:** El LLM (`gemini-3.1-flash-lite-preview` a temperatura 0.0) procesa la consulta usando exclusivamente el contexto inyectado y un formato de salida estructurado, eliminando alucinaciones.
+8. **Evaluación (RAGAS):** El desempeño general se mide evaluando `faithfulness`, `answer_relevancy` y `context_precision` usando el framework RAGAS.
 
 ---
 
@@ -86,8 +80,8 @@ Este sistema implementa las 4 estrategias clave de Prompt Engineering exigidas:
 ---
 
 ## 📝 Notas de Versión
-*   **v1.0 (Avance 1):** Implementación de arquitectura RAG, motor de PDF y técnica de Few-Shot.
-*   **Modelo optimizado:** `gemini-3-flash-preview` para velocidad y precisión en recuperación de datos.
+*   **v2.0 (Avance 2):** Implementación de almacenamiento local con base de datos vectorial ChromaDB, pipeline completo (embeddings, chunking) y cuaderno de evaluación mediante el framework RAGAS.
+*   **v1.0 (Avance 1):** Implementación de arquitectura inicial, motor de lectura PDF y estrategias de Prompting (Few-Shot, System Instructions).
 
 ---
 © 2026 - Proyecto Académico Konrad Lorenz
