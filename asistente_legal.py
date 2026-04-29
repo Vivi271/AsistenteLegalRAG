@@ -1,132 +1,222 @@
+"""
+rag_pipeline.py — Pipeline RAG para el Consultor Especialista en Neuroanatomía
+Carga los 3 PDFs científicos, los vectoriza con ChromaDB y responde consultas
+usando Google Gemini como LLM generador, anclado exclusivamente al contenido.
+"""
+
 import os
-import json
-from google import genai
-from google.genai import types
+import shutil
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv(override=True)
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_chroma import Chroma
+from langchain_core.prompts import ChatPromptTemplate
 
-# Configurar Cliente
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# ─────────────────────────────────────────────
+# 1. CONFIGURACIÓN
+# ─────────────────────────────────────────────
+load_dotenv()
 
-def analizar_consulta_legal(consulta_usuario: str, documento_contexto: str):
+API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    raise ValueError("No se encontró GEMINI_API_KEY en el archivo .env")
+
+os.environ["GOOGLE_API_KEY"] = API_KEY
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_FILES = [
+    os.path.join(BASE_DIR, "0717-9502-ijmorphol-41-04-996.pdf"),
+    os.path.join(BASE_DIR, "SCT_2025_1250.pdf"),
+    os.path.join(BASE_DIR, "circir_25_93_2_197-201.pdf"),
+]
+
+PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db")
+COLLECTION_NAME = "neuroanatomia_cientifica"
+
+# ─────────────────────────────────────────────
+# 2. MODELOS
+# ─────────────────────────────────────────────
+embeddings_model = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001",
+    google_api_key=API_KEY,
+)
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash",
+    temperature=0.1,
+    google_api_key=API_KEY,
+)
+
+# ─────────────────────────────────────────────
+# 3. SYSTEM PROMPT — Identidad del consultor
+# ─────────────────────────────────────────────
+SYSTEM_INSTRUCTION = """Eres un consultor especialista en neuroanatomía con formación en investigación científica.
+Tu misión es analizar y responder preguntas ÚNICAMENTE basándote en la información contenida
+en los artículos científicos proporcionados en el <contexto>.
+
+REGLAS ESTRICTAS:
+1. SOLO puedes usar la información del <contexto>. Nunca uses conocimiento externo.
+2. Si la respuesta NO está en el contexto, responde exactamente:
+   "Esta información no se encuentra en los documentos científicos disponibles."
+3. Siempre cita la fuente (nombre del PDF y página) al final de tu respuesta.
+4. Usa terminología científica precisa y apropiada para el área de neuroanatomía.
+5. Si la pregunta requiere combinar información de varios fragmentos, intégralos de forma coherente.
+
+EJEMPLO 1:
+<contexto>El nervio facial emerge del tronco encefálico a nivel del surco bulbopontino... (Fragmento 1, pág. 2)</contexto>
+<pregunta>¿Desde dónde emerge el nervio facial?</pregunta>
+Respuesta: Según el documento, el nervio facial emerge del tronco encefálico a nivel del surco bulbopontino.
+Fuente: Fragmento 1, pág. 2.
+
+EJEMPLO 2:
+<contexto>...descripción de variaciones en la arteria cerebral media... (Fragmento 3, pág. 7)</contexto>
+<pregunta>¿Cuáles son las variantes de la arteria basilar?</pregunta>
+Respuesta: Esta información no se encuentra en los documentos científicos disponibles."""
+
+PROMPT_TEMPLATE = """
+<contexto>
+{context}
+</contexto>
+
+<pregunta>
+{question}
+</pregunta>
+
+Responde como consultor científico especialista en neuroanatomía basándote EXCLUSIVAMENTE
+en el contexto anterior. Al final, indica en qué fuente(s) encontraste la información."""
+
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM_INSTRUCTION),
+    ("human", PROMPT_TEMPLATE),
+])
+
+
+# ─────────────────────────────────────────────
+# 4. CONSTRUCCIÓN DE LA BASE VECTORIAL
+# ─────────────────────────────────────────────
+def build_vector_store(force_rebuild: bool = False) -> Chroma:
     """
-    Simula la fase de Generación (Generation) en un flujo RAG (Retrieval-Augmented Generation),
-    donde ya se ha recuperado un documento de la base de conocimientos y se le pasa a la IA.
+    PASO 1-4 del pipeline RAG:
+    Carga PDFs → Chunking → Vectorización (Embeddings) → ChromaDB
     """
-    
-    # 1. DISEÑO DE PROMPTS: System Prompt estructurado. Define el rol, comportamiento y fomato.
-    system_instruction = """Eres un Asistente Legal Analítico experto en leyes laborales y reglamentos de la empresa.
-Tu objetivo es analizar las consultas de los usuarios y determinar la validez legal basándote ÚNICAMENTE en los documentos de referencia proporcionados.
-
-Reglas estrictas de comportamiento:
-1. No inventes información (cero alucinaciones). Si la respuesta no está en el documento, indica que no hay información en "explicacion" y pon "es_valido" en null.
-2. Tu respuesta DEBE ser obligatoriamente un objeto JSON válido para ser consumido por una API.
-3. El JSON debe respetar exactamente esta estructura:
-   {
-     "es_valido": boolean,
-     "articulo_referencia": "string o null",
-     "explicacion": "string",
-     "nivel_riesgo_legal": "Alto" | "Medio" | "Bajo"
-   }
-"""
-
-    # 2. FEW-SHOT PROMPTING: Se incluyen ejemplos dentro del prompt para guiar la salida de la IA
-    # hacia el formato JSON estricto esperado, demostrando cómo extraer el artículo y razonar.
-    few_shot_examples = """
-A continuación te muestro ejemplos de cómo debes razonar y formatear tus respuestas:
-
---- EJEMPLO 1 ---
-<contexto_legal>
-Art. 10: El despido justificado requiere faltas graves y reiteradas. Llegadas tardías menores a 10 minutos no son causal de despido inmediato sin al menos 3 advertencias previas formales.
-</contexto_legal>
-<consulta>
-Quiero despedir a un empleado de contabilidad porque llegó 5 minutos tarde ayer por primera vez.
-</consulta>
-
-Respuesta Esperada:
-{
-  "es_valido": false,
-  "articulo_referencia": "Art. 10",
-  "explicacion": "Una única llegada tardía de 5 minutos no se considera una falta grave que justifique el despido sin advertencias previas formales según el Artículo 10.",
-  "nivel_riesgo_legal": "Alto"
-}
-
---- EJEMPLO 2 ---
-<contexto_legal>
-Art. 45: Los trabajadores tienen derecho a 15 días hábiles de vacaciones remuneradas tras completar exactamente un año continuo de servicio en la organización.
-</contexto_legal>
-<consulta>
-Llevo trabajando acá 14 meses ininterrumpidos. ¿Cuántos días de vacaciones me corresponden?
-</consulta>
-
-Respuesta Esperada:
-{
-  "es_valido": true,
-  "articulo_referencia": "Art. 45",
-  "explicacion": "Al superar el año continuo de servicio (14 meses), tiene derecho a 15 días hábiles de vacaciones remuneradas.",
-  "nivel_riesgo_legal": "Bajo"
-}
-"""
-
-    # 3. ESTRATEGIAS DE DELIMITADORES: Uso de etiquetas XML (<contexto_legal>, <consulta>) 
-    # para separar claramente la información de referencia de la pregunta del usuario.
-    prompt_usuario = f"""
-Por favor, analiza la siguiente consulta real basándote EXCLUSIVAMENTE en el contexto legal proporcionado.
-
-<contexto_legal>
-{documento_contexto}
-</contexto_legal>
-
-<consulta>
-{consulta_usuario}
-</consulta>
-"""
-
-    # Combinamos el Few-Shot con el Prompt final
-    prompt_final = f"{few_shot_examples}\n\n{prompt_usuario}"
-
-    try:
-        # Generar contenido usando el nuevo SDK
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt_final,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                temperature=0.1 # Nivel de creatividad bajo (0.1) para que sea analítico y estricto
-            )
+    if os.path.exists(PERSIST_DIR) and not force_rebuild:
+        print(f"[OK] Cargando base vectorial existente desde: {PERSIST_DIR}")
+        return Chroma(
+            persist_directory=PERSIST_DIR,
+            embedding_function=embeddings_model,
+            collection_name=COLLECTION_NAME,
         )
-        
-        # Parsear la respuesta a diccionario Python para asegurar que devolvió un JSON correcto
-        resultado_json = json.loads(response.text)
-        return resultado_json
 
-    except Exception as e:
-        return {"error": f"Error al procesar con Gemini: {str(e)}"}
+    if os.path.exists(PERSIST_DIR):
+        shutil.rmtree(PERSIST_DIR)
 
-if __name__ == "__main__":
-    print("=========================================================")
-    print("⚖️ ASISTENTE LEGAL RAG - PRUEBA DE PROMPTS EXPERTOS ⚖️")
-    print("=========================================================\n")
-    
-    # Simulación de un documento recuperado de la base vectorial
-    contexto_simulado = """
-Reglamento Interno de Seguridad - Art. 22:
-El uso de teléfonos móviles personales está terminantemente prohibido durante la operación de vehículos o maquinaria pesada. 
-La infracción de esta norma de seguridad constituye una falta gravísima que deriva en despido justificado inmediato sin derecho a preaviso por poner en riesgo la vida de los trabajadores.
+    # PASO 1 — Carga de documentos PDF
+    print("\n[PASO 1] Cargando PDFs de neuroanatomía...")
+    documents = []
+    for pdf_path in PDF_FILES:
+        if not os.path.exists(pdf_path):
+            print(f"  [!] Archivo no encontrado: {os.path.basename(pdf_path)}")
+            continue
+        loader = PyPDFLoader(pdf_path)
+        pages = loader.load()
+        documents.extend(pages)
+        print(f"  ✔ {os.path.basename(pdf_path)}: {len(pages)} páginas")
+    print(f"  Total páginas cargadas: {len(documents)}")
+
+    # PASO 2 — Chunking (RecursiveCharacterTextSplitter)
+    print("\n[PASO 2] Dividiendo en fragmentos (chunk_size=600, overlap=80)...")
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600,
+        chunk_overlap=80,
+        separators=["\n\n", "\n", ".", " "],
+    )
+    chunks = splitter.split_documents(documents)
+    print(f"  Fragmentos generados: {len(chunks)}")
+
+    # PASO 3 & 4 — Embeddings + ChromaDB
+    print("\n[PASO 3 & 4] Vectorizando y almacenando en ChromaDB...")
+    print("  (modelo: gemini-embedding-001 · puede tardar ~1-2 min)")
+    vector_store = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings_model,
+        persist_directory=PERSIST_DIR,
+        collection_name=COLLECTION_NAME,
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+    total = vector_store._collection.count()
+    print(f"  ✔ {total} vectores almacenados en {PERSIST_DIR}/")
+    return vector_store
+
+
+# ─────────────────────────────────────────────
+# 5. PIPELINE RAG — CONSULTA
+# ─────────────────────────────────────────────
+def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
     """
-    
-    consulta_real = "Identificamos a un operario de montacargas viendo videos en su celular móvil mientras movía estibas en la bodega. Queremos terminar su contrato laboral hoy mismo. ¿Procedemos?"
-    
-    print(f"[1] Buscando en Base de Conocimientos (Recuperación RAG simulada)...")
-    print(f"Contexto Recuperado:\n{contexto_simulado}")
-    
-    print(f"[2] Consulta del Usuario:\n{consulta_real}\n")
-    print("[3] Enviando a Gemini con (System Prompt + Few-Shot + XML Delimiters)...\n")
-    
-    resultado = analizar_consulta_legal(consulta_real, contexto_simulado)
-    
-    print("RESULTADO DEL ASISTENTE (JSON ESTRUCTURADO):")
-    print(json.dumps(resultado, indent=2, ensure_ascii=False))
+    PASOS 5-7 del pipeline RAG:
+    Recuperación vectorial → Prompt aumentado → Generación con LLM
+    """
+    # PASO 5 — Recuperación (k fragmentos más similares)
+    retriever = vector_store.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": k},
+    )
+    docs = retriever.invoke(pregunta)
+
+    # PASO 6 — Construcción del prompt aumentado
+    context_parts = []
+    for i, doc in enumerate(docs, 1):
+        fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
+        pagina = doc.metadata.get("page", "?")
+        context_parts.append(
+            f"[Fragmento {i} — {fuente}, Pág. {pagina}]\n{doc.page_content}"
+        )
+    context = "\n\n---\n\n".join(context_parts)
+
+    augmented_prompt = prompt_template.invoke({
+        "context": context,
+        "question": pregunta,
+    })
+
+    # PASO 7 — Generación con LLM (temperatura baja → respuestas precisas)
+    respuesta = llm.invoke(augmented_prompt)
+    texto = respuesta.content if isinstance(respuesta.content, str) else str(respuesta.content)
+
+    return {
+        "pregunta": pregunta,
+        "respuesta": texto,
+        "fragmentos": docs,
+        "tokens_contexto_aprox": len(context) // 4,
+    }
+
+
+# ─────────────────────────────────────────────
+# 6. EJECUCIÓN DIRECTA (modo script / prueba)
+# ─────────────────────────────────────────────
+if __name__ == "__main__":
+    print("=" * 65)
+    print("🧠 CONSULTOR RAG — NEUROANATOMÍA CIENTÍFICA")
+    print("=" * 65)
+
+    vs = build_vector_store(force_rebuild=False)
+
+    preguntas_prueba = [
+        "¿Cuáles son las principales estructuras neuroanatómicas descritas?",
+        "¿Qué hallazgos morfológicos o histológicos se reportan?",
+        "¿Qué metodología de investigación utilizaron los autores?",
+        "¿Cuáles son las conclusiones principales de los artículos?",
+        "¿Qué variaciones anatómicas se identificaron en los estudios?",
+    ]
+
+    for pregunta in preguntas_prueba:
+        print(f"\n{'─'*65}")
+        print(f"❓ {pregunta}")
+        resultado = consultar(pregunta, vs)
+        print(f"\n🤖 {resultado['respuesta']}")
+        print(f"\n   [~{resultado['tokens_contexto_aprox']} tokens | "
+              f"{len(resultado['fragmentos'])} fragmentos recuperados]")
+
+    print(f"\n{'='*65}")
+    print("Sistema listo.")

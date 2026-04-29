@@ -1,181 +1,244 @@
+"""
+app.py — Interfaz Streamlit del Consultor Científico en Neuroanatomía RAG
+Avance 2: Sistema RAG completo con LangChain + ChromaDB + Google Gemini
+"""
+
 import streamlit as st
 import os
-import json
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
-from pypdf import PdfReader
-import io
 
-# Configuración estética de la app
-st.set_page_config(page_title="Asistente Legal RAG", page_icon="⚖️", layout="centered")
+# ── Configuración de página (DEBE ser la primera instrucción de Streamlit) ──
+st.set_page_config(
+    page_title="Consultor Neuroanatomía RAG",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
+# ── CSS Premium ──
 st.markdown("""
-    <style>
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        height: 3.5em;
-        background-color: #007bff;
-        color: white;
-        font-weight: bold;
-    }
-    .report-card {
-        padding: 25px;
-        border-radius: 12px;
-        background-color: white;
-        color: #1f2937;
-        border-left: 6px solid #007bff;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        margin-top: 20px;
-    }
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+.stApp { background: linear-gradient(135deg, #0a0f1e 0%, #0d1b2a 50%, #0a1628 100%); }
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0d1b2a 0%, #112240 100%);
+    border-right: 1px solid rgba(100, 200, 255, 0.15);
+}
+
+.hero-header {
+    background: linear-gradient(135deg, #0d2137 0%, #1a3a5c 50%, #0d2137 100%);
+    border: 1px solid rgba(100, 200, 255, 0.2);
+    border-radius: 16px;
+    padding: 32px 40px;
+    margin-bottom: 28px;
+    text-align: center;
+}
+.hero-header h1 { color: #64c8ff; font-size: 2rem; font-weight: 700; margin: 0; }
+.hero-header p  { color: #8ab4d4; font-size: 1rem; margin: 8px 0 0 0; }
+
+.response-card {
+    background: linear-gradient(135deg, rgba(13,33,55,0.95) 0%, rgba(17,34,64,0.95) 100%);
+    border: 1px solid rgba(100, 200, 255, 0.25);
+    border-left: 4px solid #64c8ff;
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-top: 16px;
+    color: #cce8ff;
+    line-height: 1.75;
+    font-size: 0.97rem;
+}
+
+.metric-row { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.metric-chip {
+    background: rgba(100, 200, 255, 0.08);
+    border: 1px solid rgba(100, 200, 255, 0.2);
+    border-radius: 20px;
+    padding: 6px 16px;
+    color: #64c8ff;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.stTextArea textarea {
+    background: rgba(13,33,55,0.8) !important;
+    border: 1px solid rgba(100,200,255,0.3) !important;
+    border-radius: 10px !important;
+    color: #cce8ff !important;
+    font-size: 0.95rem !important;
+}
+.stButton > button {
+    background: linear-gradient(135deg, #1a6fa8 0%, #1a82c8 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 14px 24px !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+    width: 100% !important;
+    transition: all 0.2s ease !important;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #2080c0 0%, #209ae0 100%) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(100,200,255,0.3) !important;
+}
+hr { border-color: rgba(100,200,255,0.1) !important; }
+</style>
 """, unsafe_allow_html=True)
 
-# Carga de configuración
-load_dotenv(override=True)
-if not os.getenv("GEMINI_API_KEY"):
-    st.error("Error: GEMINI_API_KEY no configurada en .env")
+# ── Carga de la API key ──
+load_dotenv()
+API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    st.error("🔑 No se encontró GEMINI_API_KEY en el archivo .env")
+    st.stop()
+os.environ["GOOGLE_API_KEY"] = API_KEY
+
+# ── Importaciones del RAG ──
+try:
+    from asistente_legal import build_vector_store, consultar
+except ImportError as e:
+    st.error(f"Error al importar el pipeline RAG: {e}")
     st.stop()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# ── Sidebar ──
+with st.sidebar:
+    st.markdown("### 🧠 Neuroanatomía RAG")
+    st.markdown("---")
+    st.markdown("**Base de conocimientos:**")
+    pdfs = [
+        "📄 International J. of Morphology (2023)",
+        "📄 Surgical & Clinical Trials (2025)",
+        "📄 Cirugía y Cirujanos (2025)",
+    ]
+    for p in pdfs:
+        st.markdown(f"- {p}")
+    st.markdown("---")
+    st.markdown("**Configuración del pipeline:**")
+    k_chunks = st.slider("Fragmentos recuperados (k)", 3, 8, 5)
+    st.markdown("---")
+    st.markdown("**Modelo LLM:** `gemini-1.5-flash`")
+    st.markdown("**Embeddings:** `embedding-001`")
+    st.markdown("**Temperatura:** `0.1`")
+    st.markdown("**chunk_size:** `600` | **overlap:** `80`")
+    st.markdown("---")
+    if st.button("🔄 Reconstruir base vectorial"):
+        with st.spinner("Reconstruyendo..."):
+            st.cache_resource.clear()
+            st.session_state.pop("vector_store", None)
+        st.success("¡Base vectorial reconstruida!")
+        st.rerun()
+    st.markdown("---")
+    st.caption("© 2026 · Konrad Lorenz · V. García & B. Ramirez")
 
-def extract_text_from_pdf(pdf_file):
-    try:
-        reader = PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-        return text
-    except Exception as e:
-        st.error(f"Error al leer el PDF: {e}")
-        return ""
+# ── Header principal ──
+st.markdown("""
+<div class="hero-header">
+    <h1>🧠 Consultor Especialista en Neuroanatomía</h1>
+    <p>Sistema RAG · Respuestas fundamentadas exclusivamente en artículos científicos peer-reviewed</p>
+</div>
+""", unsafe_allow_html=True)
 
-def procesar_rag(consulta, documento):
-    # 1. System Instruction (Configuración del Sistema)
-    sys_instruction = """Eres un Asistente Legal experto. Tu tarea es analizar consultas basadas UNICAMENTE en el texto proporcionado en <contexto>.
-    Si la información no está en el contexto, indica que no se encontró base legal.
-    
-    REGLA DE FORMATO: Debes responder OBLIGATORIAMENTE en formato JSON estricto."""
+# ── Inicialización de la base vectorial (cacheada) ──
+@st.cache_resource(show_spinner=False)
+def get_vector_store():
+    return build_vector_store(force_rebuild=False)
 
-    # 2. Few-Shot Prompting (Ejemplos para guiar el formato y razonamiento)
-    ejemplos = """
-    EJEMPLO 1:
-    <contexto>Art 1. La jornada semanal es de 40 horas.</contexto>
-    <consulta>¿Puedo trabajar 50 horas?</consulta>
-    Respuesta: {"es_valido": false, "ref": "Art 1", "explica": "La jornada máxima permitida es de 40 horas según el reglamento.", "riesgo": "Alto"}
+if "vector_store" not in st.session_state:
+    with st.spinner("🔬 Inicializando base de conocimientos neuroanatómica (primera vez ~1-2 min)..."):
+        st.session_state["vector_store"] = get_vector_store()
+    st.success("✅ Base vectorial lista. ¡Puedes realizar tu consulta!")
 
-    EJEMPLO 2:
-    <contexto>Art 5. Se permite el teletrabajo para cargos administrativos.</contexto>
-    <consulta>Soy secretaria, ¿puedo pedir teletrabajo?</consulta>
-    Respuesta: {"es_valido": true, "ref": "Art 5", "explica": "Su cargo es administrativo y el artículo 5 lo permite.", "riesgo": "Bajo"}
-    """
-    
-    # 3. Estrategia de Delimitadores (XML Tags)
-    prompt = f"{ejemplos}\n\nAHORA ANALIZA LO SIGUIENTE:\n<contexto>\n{documento}\n</contexto>\n\n<consulta>\n{consulta}\n</consulta>"
+vs = st.session_state["vector_store"]
 
-    # Generación con Gemini
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview", 
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=sys_instruction,
-            response_mime_type="application/json",
-            temperature=0.1
-        )
-    )
-    return json.loads(response.text)
+# ── Preguntas sugeridas ──
+st.markdown("#### 💡 Preguntas frecuentes")
+col1, col2 = st.columns(2)
+ejemplos = [
+    "¿Cuáles son las estructuras neuroanatómicas estudiadas?",
+    "¿Qué metodología utilizaron los investigadores?",
+    "¿Qué hallazgos morfológicos se reportan?",
+    "¿Cuáles son las conclusiones clínicas principales?",
+    "¿Qué variaciones anatómicas se identificaron?",
+    "¿Qué técnicas de imagen o histología se usaron?",
+]
+for i, ej in enumerate(ejemplos):
+    with (col1 if i % 2 == 0 else col2):
+        if st.button(f"🔹 {ej}", key=f"ej_{i}"):
+            st.session_state["pregunta_input"] = ej
 
-# --- Interfaz de Usuario ---
-st.title("⚖️ Asistente Legal Inteligente")
-st.write("Carga tu reglamento en PDF o pega el texto para analizar casos legales con precisión.")
+st.markdown("---")
 
-st.divider()
-
-# Sección de entrada de conocimiento
-st.subheader("1. Base de Conocimientos (Documento Legal)")
-
-# Opción de subir PDF
-uploaded_file = st.file_uploader("📂 Sube un reglamento en PDF", type=["pdf"])
-
-pdf_text = ""
-if uploaded_file is not None:
-    with st.spinner("Extrayendo texto del PDF..."):
-        pdf_text = extract_text_from_pdf(uploaded_file)
-        if pdf_text:
-            st.success("Texto extraído correctamente del PDF.")
-
-# Área de texto (se llena con el PDF o manualmente)
-default_text = "Reglamento Interno de Seguridad - Art. 22:\nEl uso de teléfonos móviles personales está terminantemente prohibido durante la operación de vehículos o maquinaria pesada. La infracción de esta norma de seguridad constituye una falta gravísima que justifica el despido inmediato."
-doc_content = st.text_area(
-    "✏️ Contenido legal (Texto extraído o pegado):", 
-    height=200, 
-    value=pdf_text if pdf_text else default_text
+# ── Input de la consulta ──
+st.markdown("#### ❓ Tu consulta científica")
+pregunta = st.text_area(
+    label="Consulta:",
+    value=st.session_state.get("pregunta_input", ""),
+    height=120,
+    placeholder="Ej: ¿Qué variaciones morfológicas del nervio facial se identificaron en los estudios?",
+    key="pregunta_ta",
+    label_visibility="collapsed",
 )
 
-# Sección de consulta
-st.subheader("2. Caso a Analizar")
-query_area = st.text_area(
-    "❓ Consulta o situación a evaluar:", 
-    height=100, 
-    placeholder="Ej: ¿Es legal despedir a alguien por usar el celular en la bodega?"
-)
-
-if st.button("🚀 Iniciar Análisis Legal"):
-    if not query_area.strip():
-        st.warning("Por favor, ingresa una consulta para analizar.")
-    elif not doc_content.strip():
-        st.warning("Por favor, proporciona un documento legal (PDF o texto).")
+if st.button("🔬 Consultar al especialista"):
+    if not pregunta.strip():
+        st.warning("Por favor, escribe una pregunta antes de consultar.")
     else:
-        try:
-            with st.spinner("Analizando con IA..."):
-                resultado = procesar_rag(query_area, doc_content)
-                
-                # Mostrar resultados
-                st.markdown("### 📋 Resultados del Análisis")
-                if resultado.get("es_valido"):
-                    st.success("Acción legalmente procedente (VÁLIDA)")
-                else:
-                    st.error("Acción no procedente (INVÁLIDA)")
-                
-                st.markdown(f"""
-                <div class="report-card">
-                    <strong>Ref. Legal:</strong> {resultado.get('ref')}<br><br>
-                    <strong>Análisis:</strong> {resultado.get('explica')}<br><br>
-                    <strong>Nivel de Riesgo:</strong> {resultado.get('riesgo')}
-                </div>
-                """, unsafe_allow_html=True)
+        with st.spinner("🧬 Recuperando fragmentos relevantes y generando respuesta..."):
+            resultado = consultar(pregunta, vs, k=k_chunks)
 
-                # Botón para descargar el reporte
-                reporte_txt = f"""INFORME DE ANÁLISIS LEGAL
--------------------------
-RESULTADO: {"VÁLIDO" if resultado.get("es_valido") else "INVÁLIDO"}
-REFERENCIA: {resultado.get('ref')}
-RIESGO: {resultado.get('riesgo')}
+        # ── Respuesta ──
+        st.markdown("#### 📋 Respuesta del consultor")
+        st.markdown(f"""
+        <div class="response-card">
+            {resultado["respuesta"].replace(chr(10), "<br>")}
+        </div>
+        """, unsafe_allow_html=True)
 
-ANÁLISIS:
-{resultado.get('explica')}
+        # ── Métricas del pipeline ──
+        st.markdown(f"""
+        <div class="metric-row">
+            <span class="metric-chip">📦 {len(resultado["fragmentos"])} fragmentos recuperados</span>
+            <span class="metric-chip">🔤 ~{resultado["tokens_contexto_aprox"]} tokens de contexto</span>
+            <span class="metric-chip">🤖 gemini-1.5-flash · T=0.1</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-Generado por: Asistente Legal RAG (V. García & B. Ramirez)
+        # ── Fuentes recuperadas expandibles ──
+        st.markdown("#### 📚 Fuentes científicas consultadas")
+        for i, doc in enumerate(resultado["fragmentos"], 1):
+            fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
+            pagina = doc.metadata.get("page", "?")
+            with st.expander(f"Fragmento {i} — {fuente} · Pág. {pagina}"):
+                st.markdown(f"```\n{doc.page_content[:600]}\n```")
+
+        # ── Descarga del reporte ──
+        fuentes_txt = "\n".join([
+            f"  [{i+1}] {os.path.basename(d.metadata.get('source','?'))} — Pág. {d.metadata.get('page','?')}"
+            for i, d in enumerate(resultado["fragmentos"])
+        ])
+        reporte = f"""CONSULTA NEUROANATÓMICA — REPORTE RAG
+=========================================
+PREGUNTA:
+{resultado["pregunta"]}
+
+RESPUESTA:
+{resultado["respuesta"]}
+
+FUENTES RECUPERADAS:
+{fuentes_txt}
+
+=========================================
+Generado por: Consultor RAG · Neuroanatomía Científica
+Konrad Lorenz · V. García & B. Ramirez · 2026
 """
-                st.download_button(
-                    label="📥 Descargar Informe del Caso (TXT)",
-                    data=reporte_txt,
-                    file_name="informe_legal.txt",
-                    mime="text/plain"
-                )
-                
-        except Exception as e:
-            if "429" in str(e):
-                st.error("Límite de cuota excedido. Por favor, espera 60 segundos y reintenta.")
-            else:
-                st.error(f"Error técnico: {str(e)}")
-
-# Sidebar institucional
-st.sidebar.image("https://ascofapsi.org.co/wp-content/uploads/2022/06/konrad_lorenz.png", width=180)
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Integrantes:**")
-st.sidebar.markdown("- Viviana García")
-st.sidebar.markdown("- Braian Ramirez")
-st.sidebar.markdown("---")
-st.sidebar.markdown("Proyecto RAG - Avance 1")
+        st.download_button(
+            label="📥 Descargar reporte científico",
+            data=reporte,
+            file_name="reporte_neuroanatomia.txt",
+            mime="text/plain",
+        )

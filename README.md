@@ -1,35 +1,96 @@
-# ⚖️ Asistente Legal Inteligente (RAG)
+# 🧠 Consultor Especialista en Neuroanatomía (RAG)
 
-Este proyecto es un asistente experto diseñado para analizar reglamentos, contratos y leyes utilizando la arquitectura **RAG (Retrieval-Augmented Generation)**. La aplicación permite cargar documentos en formato PDF o texto plano y realizar consultas legales precisas basadas exclusivamente en el conocimiento proporcionado, mitigando alucinaciones y garantizando trazabilidad legal.
+Sistema de IA que actúa como consultor científico especializado en neuroanatomía. Responde preguntas basándose **exclusivamente** en los artículos científicos cargados como base de conocimientos, usando la arquitectura **RAG (Retrieval-Augmented Generation)** con almacenamiento vectorial local.
 
 **Desarrollado por:**
-*   **Viviana García** - [Konrad Lorenz]
-*   **Braian Ramirez** - [Konrad Lorenz]
+*   **Viviana García** — Konrad Lorenz
+*   **Braian Ramirez** — Konrad Lorenz
 
 ---
 
-## 🏗️ Arquitectura del Sistema (RAG Flow - Avance 2)
+## 🏗️ Arquitectura del Sistema — Flujo RAG Completo
 
-El flujo de información se implementó utilizando LangChain y ChromaDB para operar de manera local y privada, garantizando la precisión de las respuestas:
+El pipeline procesa los documentos científicos en **8 pasos** encadenados:
 
-1. **Carga de Documentos:** Se extrae el texto de archivos PDF (Reglamentos, manuales o leyes) usando `PyPDFLoader`.
-2. **División en Fragmentos (Chunking):** El texto extraído se divide en pequeños fragmentos de 500 caracteres (con un solapamiento de 50) usando `RecursiveCharacterTextSplitter`.
-3. **Vectorización (Embeddings):** Cada fragmento se convierte en un vector numérico multidimensional utilizando el modelo `gemini-embedding-001`.
-4. **Almacenamiento Local:** Estos vectores se guardan en una base de datos vectorial local basada en **ChromaDB**.
-5. **Recuperación (Retrieval):** Ante una consulta del usuario, el sistema vectoriza la pregunta y extrae de ChromaDB los `k=5` fragmentos semánticamente más similares.
-6. **Prompt Aumentado:** El sistema construye un prompt estricto donde los fragmentos recuperados se inyectan como el *único* contexto permitido.
-7. **Generación Segura:** El LLM (`gemini-3.1-flash-lite-preview` a temperatura 0.0) procesa la consulta usando exclusivamente el contexto inyectado y un formato de salida estructurado, eliminando alucinaciones.
-8. **Evaluación (RAGAS):** El desempeño general se mide evaluando `faithfulness`, `answer_relevancy` y `context_precision` usando el framework RAGAS.
+```
+📄 PDFs Científicos (Neuroanatomía)
+ │
+ ▼
+ ✂️  PASO 1 — Carga de documentos (PyPDFLoader)
+ │
+ ▼
+ 🧩 PASO 2 — División en fragmentos (Chunking)
+ │           chunk_size=600 · overlap=80
+ ▼
+ 🔢 PASO 3 — Generación de Embeddings
+ │           modelo: gemini-embedding-001
+ ▼
+ 🗄️  PASO 4 — Base Vectorial local (ChromaDB)
+ │           similitud coseno · persistente en disco
+ ▼
+ ❓  Consulta del usuario
+ │
+ ▼
+ 🔍 PASO 5 — Recuperación vectorial (k=5 fragmentos)
+ │
+ ▼
+ 📝 PASO 6 — Construcción del Prompt Aumentado
+ │           contexto inyectado con delimitadores XML
+ ▼
+ 🤖 PASO 7 — LLM generador (gemini-1.5-flash · T=0.1)
+ │           respuesta anclada al contexto
+ ▼
+ 📊 PASO 8 — Evaluación con RAGAS
+             faithfulness · answer_relevancy · context_precision
+```
+
+---
+
+## 🗂️ Estructura del Proyecto
+
+```
+AsistenteLegalRAG/
+│
+├── app.py                      # Interfaz Streamlit del consultor
+├── asistente_legal.py          # Pipeline RAG (chunks, embeddings, ChromaDB, consulta)
+│
+├── 0717-9502-ijmorphol-41-04-996.pdf   # Artículo 1 — International J. of Morphology
+├── SCT_2025_1250.pdf                    # Artículo 2 — Surgical & Clinical Trials
+├── circir_25_93_2_197-201.pdf           # Artículo 3 — Cirugía y Cirujanos
+│
+├── chroma_neuro_db/            # Base vectorial local (generada automáticamente)
+├── Flujo_RAG_Evaluacion.ipynb  # Notebook de evaluación con RAGAS
+├── Evaluacion_RAG.md           # Reporte de métricas de evaluación
+├── requirements.txt            # Dependencias del proyecto
+└── .env                        # API Key (no subir a GitHub)
+```
 
 ---
 
 ## 🛠️ Tecnologías Utilizadas
 
-*   **Core:** Python 3.9+
-*   **IA:** Google Gemini 3 Flash (vía SDK `google-genai`)
-*   **Frontend:** Streamlit (Custom CSS para diseño premium)
-*   **Documentación:** `pypdf` (Motor de extracción de PDF)
-*   **Entorno:** `python-dotenv` para gestión de API Keys seguras.
+| Componente | Tecnología |
+|---|---|
+| **Lenguaje** | Python 3.9+ |
+| **Frontend** | Streamlit (CSS personalizado dark-mode) |
+| **LLM generador** | Google Gemini 1.5 Flash (`langchain-google-genai`) |
+| **Embeddings** | Google `embedding-001` |
+| **Base vectorial** | ChromaDB (almacenamiento local persistente) |
+| **Pipeline RAG** | LangChain + LangChain-Chroma |
+| **Lector de PDFs** | PyPDFLoader (`langchain-community`) |
+| **Evaluación** | RAGAS (`faithfulness`, `answer_relevancy`, `context_precision`) |
+| **Variables de entorno** | `python-dotenv` |
+
+---
+
+## 🧠 Ingeniería de Prompts Implementada
+
+El sistema implementa **4 estrategias clave** de Prompt Engineering:
+
+1. **System Instruction:** Identidad de consultor científico con restricción estricta de no usar conocimiento externo al contexto.
+2. **Few-Shot Prompting:** Ejemplos de análisis inyectados en el prompt del sistema para guiar el formato de respuesta científica.
+3. **Delimitadores XML:** Tags `<contexto>` y `<pregunta>` para jerarquizar claramente la información recuperada vs. la consulta del usuario.
+4. **Structured Retrieval (RAG):** Los fragmentos más relevantes se recuperan semánticamente desde ChromaDB y se inyectan como único contexto válido antes de llamar al LLM.
 
 ---
 
@@ -39,15 +100,15 @@ El flujo de información se implementó utilizando LangChain y ChromaDB para ope
 ```bash
 # Crear entorno virtual
 python3 -m venv env
-source env/bin/activate  # MacOS/Linux
-# .\env\Scripts\activate # Windows
+source env/bin/activate   # macOS / Linux
+# .\env\Scripts\activate  # Windows
 
 # Instalar dependencias
 pip install -r requirements.txt
 ```
 
 ### 2. Configuración
-Crea un archivo `.env` en la raíz con tu clave de API:
+Crea o edita el archivo `.env` en la raíz del proyecto:
 ```env
 GEMINI_API_KEY=tu_clave_aqui
 ```
@@ -56,32 +117,29 @@ GEMINI_API_KEY=tu_clave_aqui
 ```bash
 streamlit run app.py
 ```
+> **Primera ejecución:** El sistema vectorizará automáticamente los 3 PDFs y creará la base ChromaDB. Tarda ~1-2 minutos. Las siguientes ejecuciones cargan instantáneamente desde el disco.
 
 ---
 
-## 🧠 Ingeniería de Prompts (Requisitos Académicos)
+## 📊 Resultados de Evaluación RAGAS
 
-Este sistema implementa las 4 estrategias clave de Prompt Engineering exigidas:
+| Métrica | Promedio |
+|---|---|
+| `faithfulness` | **1.00** — No se generó ninguna alucinación |
+| `answer_relevancy` | **0.79** — Respuestas pertinentes a la consulta |
+| `context_precision` | **0.30** — Área de mejora: reducir `chunk_size` |
 
-1.  **System Instruction:** Se define una "Identidad de Sistema" que obliga al modelo a actuar como un jurista experto y prohíbe el uso de conocimiento externo al documento.
-2.  **Few-Shot Prompting:** Se inyectan ejemplos de entrenamiento rápido en el prompt para asegurar que la IA aprenda el formato de análisis y la estructura JSON en un solo paso.
-3.  **Delimitadores XML:** Se utilizan tags `<contexto>` y `<consulta>` para jerarquizar la información y evitar confusiones en el modelo durante el procesamiento de textos largos.
-4.  **Structured Output (JSON):** Se fuerza al modelo a responder exclusivamente en JSON técnico (`response_mime_type`), lo que permite que la interfaz muestre alertas de colores y tarjetas de riesgo automáticamente.
-
----
-
-## 🌟 Características Destacadas (Actualizado)
-
-*   ✅ **Soporte PDF:** Carga de reglamentos directamente desde archivos PDF.
-*   ✅ **Diseño Premium:** Interfaz con tarjetas de reporte visuales y colores semánticos (Verde=Válido, Rojo=Inválido).
-*   ✅ **Exportación:** Generación automática de reportes de caso en formato texto descargable.
-*   ✅ **Seguridad Jurídica:** Clasificación de niveles de riesgo (Bajo, Medio, Alto) en cada análisis.
+Ver análisis completo → [`Evaluacion_RAG.md`](./Evaluacion_RAG.md)
 
 ---
 
-## 📝 Notas de Versión
-*   **v2.0 (Avance 2):** Implementación de almacenamiento local con base de datos vectorial ChromaDB, pipeline completo (embeddings, chunking) y cuaderno de evaluación mediante el framework RAGAS.
-*   **v1.0 (Avance 1):** Implementación de arquitectura inicial, motor de lectura PDF y estrategias de Prompting (Few-Shot, System Instructions).
+## 📝 Control de Versiones
+
+| Versión | Tag Git | Descripción |
+|---|---|---|
+| **v1.0** | `v1.0-asistente-legal` | Asistente Legal RAG con Few-Shot y Structured Output |
+| **v2.0** | `main` (actual) | Consultor Neuroanatomía con ChromaDB + RAGAS |
 
 ---
-© 2026 - Proyecto Académico Konrad Lorenz
+
+© 2026 — Proyecto Académico · Universidad Konrad Lorenz
