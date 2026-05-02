@@ -217,7 +217,7 @@ if "historial" not in st.session_state:
     st.session_state.historial = []
 
 # ── Carga de la API key ──
-load_dotenv()
+load_dotenv(override=True)
 API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     st.error("🔑 No se encontró GEMINI_API_KEY en el archivo .env")
@@ -226,30 +226,42 @@ os.environ["GOOGLE_API_KEY"] = API_KEY
 
 # ── Importaciones del RAG ──
 try:
-    from rag_pipeline import build_vector_store, consultar
+    from rag_pipeline import build_vector_store, add_documents_incremental, remove_documents_from_store, consultar, DOCS_DIR
 except ImportError as e:
     st.error(f"Error al importar el pipeline RAG: {e}")
     st.stop()
 
-# ── Carga del vector store ANTES del sidebar (para que el conteo sea correcto) ──
+# ── Carga del vector store (cacheado globalmente para evitar error 1032 SQLite) ──
+@st.cache_resource
 def get_vector_store():
-    """Carga la DB desde disco. Sin @st.cache_resource para evitar cachear None."""
+    """Siempre crea una conexión nueva desde disco. ChromaDB no es thread-safe
+    entre reruns de Streamlit si se guarda el objeto en session_state."""
     try:
         return build_vector_store(force_rebuild=False)
     except FileNotFoundError:
-        return None  # DB no existe aún — mostrar botón de reconstrucción
+        return None
     except Exception as e:
         err = str(e).lower()
-        # SOLO eliminar si es la corrupción específica de ChromaDB "default_tenant"
         if "default_tenant" in err and "does not exist" in err:
             import shutil as _sh
             _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_neuro_db")
-            if os.path.exists(_db):
-                _sh.rmtree(_db)
+            if os.path.exists(_db): _sh.rmtree(_db)
         return None
 
-if "vector_store" not in st.session_state or st.session_state["vector_store"] is None:
-    st.session_state["vector_store"] = get_vector_store()
+# Cargar desde caché global para no saturar SQLite
+vs = get_vector_store()
+
+# ── Indexación incremental automática tras subir nuevos archivos ──
+if st.session_state.get("_rutas_nuevas"):
+    rutas = st.session_state.pop("_rutas_nuevas")
+    with st.spinner(f"⚡ Indexando {len(rutas)} archivo(s) nuevos..."):
+        try:
+            # Pasar vs existente para reutilizar la conexion (evita error 1032)
+            vs = add_documents_incremental(rutas, vs_existente=vs)
+            n = vs._collection.count()
+            st.success(f"✅ ¡Indexación completa! Base ahora tiene {n} vectores.")
+        except Exception as e:
+            st.error(f"❌ Error indexando: {str(e)[:300]}")
 
 # Nombres legibles de PDFs (sidebar + resultados)
 mapeo_nombres_sidebar = {
@@ -288,13 +300,18 @@ with st.sidebar:
             ya_guardados = st.session_state.get("_uploads_guardados", set())
             nuevos = [uf for uf in nuevos_archivos if uf.name not in ya_guardados]
             if nuevos:
+                rutas_nuevas = []
                 for uf in nuevos:
                     destino = os.path.join(docs_dir, uf.name)
                     with open(destino, "wb") as f:
                         f.write(uf.getbuffer())
                     ya_guardados.add(uf.name)
+                    rutas_nuevas.append(destino)
                 st.session_state["_uploads_guardados"] = ya_guardados
-                st.success(f"✅ {len(nuevos)} archivo(s) guardado(s) en Docs/. Haz clic en **Reconstruir VectorDB**.")
+                st.session_state["_rutas_nuevas"] = rutas_nuevas
+                st.success(f"✅ {len(nuevos)} archivo(s) guardado(s). Indexando automáticamente...")
+                import time; time.sleep(1)
+                st.rerun()
         else:
             # Limpiar el set cuando el usuario quita los archivos del uploader
             st.session_state["_uploads_guardados"] = set()
@@ -302,7 +319,7 @@ with st.sidebar:
         # ── Lista de PDFs con opción de eliminar ──
         pdfs_actuales = sorted([f for f in os.listdir(docs_dir) if f.lower().endswith(".pdf")])
         if pdfs_actuales:
-            st.markdown("<div style='margin-top:8px; font-size:0.8rem; color:#64748b;'>Documentos en la base:</div>", unsafe_allow_html=True)
+            st.markdown("<div style='margin-top:8px; font-size:0.8rem; color:#64748b;'>Archivos PDF subidos (en la carpeta local):</div>", unsafe_allow_html=True)
             for pdf in pdfs_actuales:
                 nombre = mapeo_nombres_sidebar.get(pdf, pdf.replace(".pdf", "").replace("-", " ").replace("_", " "))
                 col_n, col_d = st.columns([5, 1])
@@ -326,9 +343,18 @@ with st.sidebar:
                 col_si, col_no = st.columns(2)
                 with col_si:
                     if st.button("✅ Sí, eliminar", key="confirmar_delete", use_container_width=True):
+                        # 1. Borrar el PDF del disco
                         os.remove(os.path.join(docs_dir, pending))
+                        # 2. Borrar sus vectores de ChromaDB (no rebuild necesario)
+                        with st.spinner(f"🗑️ Eliminando vectores de {pending}..."):
+                            try:
+                                vs_upd, n_borrados = remove_documents_from_store(pending, vs_existente=vs)
+                                st.success(f"✅ Eliminado — {n_borrados} vectores removidos. Base: {vs_upd._collection.count()}")
+                                import time; time.sleep(1)
+                            except Exception as e:
+                                st.error(f"❌ Error al eliminar vectores: {str(e)[:200]}")
+                                import time; time.sleep(2)
                         st.session_state["_pending_delete"] = None
-                        st.session_state["_uploads_guardados"] = set()
                         st.rerun()
                 with col_no:
                     if st.button("❌ Cancelar", key="cancelar_delete", use_container_width=True):
@@ -360,42 +386,83 @@ with st.sidebar:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_neuro_db")
     )
 
-    # Conteo real desde la base (si ya está cargada en session_state)
+    # Conteo real — usar el vs ya cargado fresco al inicio
     try:
-        _vs_temp = st.session_state.get("vector_store", None)
-        _sidebar_count = _vs_temp._collection.count() if _vs_temp is not None else 0
+        _sidebar_count = vs._collection.count() if vs is not None else 0
     except Exception:
         _sidebar_count = 0
 
-    if _sidebar_count > 0:
-        st.success(f"✅ Base lista — {_sidebar_count} vectores indexados")
-    elif db_existe:
-        st.warning("⚠️ Base detectada pero vacía — Reconstruye")
+    # Detectar desincronía: archivos en Docs/ no indexados
+    _docs_files = set(f for f in os.listdir(docs_dir) if f.lower().endswith('.pdf')) if os.path.exists(docs_dir) else set()
+    if vs is not None and _sidebar_count > 0:
+        try:
+            _all_meta = vs._collection.get(include=["metadatas"])
+            _indexados = set(os.path.basename(m.get('source','')) for m in _all_meta["metadatas"])
+            _sin_indexar = _docs_files - _indexados
+            _vectores_huerfanos = _indexados - _docs_files  # en DB pero no en Docs/
+        except Exception:
+            _sin_indexar = set()
+            _vectores_huerfanos = set()
     else:
-        st.error("❌ Base no encontrada — Reconstruye")
+        _sin_indexar = _docs_files
+        _vectores_huerfanos = set()
 
+    if not _sin_indexar and _sidebar_count > 0:
+        st.success(f"✅ Lista base — {_sidebar_count} vectores indexados")
+    elif _sin_indexar:
+        if st.session_state.get("_iniciar_indexado"):
+            st.info("⏳ Indexación en curso... por favor espera a que termine el proceso.")
+        else:
+            st.warning(f"⚠️ {_sidebar_count} vectores — {len(_sin_indexar)} archivo(s) pendiente(s) de indexar")
+            if st.button(f"⚡ Indexar archivos pendientes ({len(_sin_indexar)})", use_container_width=True, key="btn_sync"):
+                st.session_state["_iniciar_indexado"] = sorted(list(_sin_indexar))
+                st.rerun()
+    elif _sidebar_count == 0:
+        if db_existe:
+            st.warning("⚠️ Base detectada pero vacía — Sube PDFs para comenzar.")
+        else:
+            st.error("❌ Base no encontrada — Reconstruye")
 
-    if st.button("🔄 Reconstruir VectorDB", use_container_width=True):
-        st.warning("⏳ Reconstruyendo... tarda ~3-5 min. No cierres la ventana.")
-        with st.spinner("🔬 Leyendo PDFs → Chunks → Vectorizando → ChromaDB..."):
-            try:
-                # Liberar la conexión activa ANTES de reconstruir
-                # (ChromaDB usa SQLite, no soporta dos procesos simultáneos)
-                vs_actual = st.session_state.pop("vector_store", None)
-                if vs_actual is not None:
-                    try:
-                        vs_actual._client._system.stop()
-                    except Exception:
-                        pass
-                    del vs_actual
-                st.cache_resource.clear()
+    # ── Procesar la cola de indexado en un solo paso ──
+    if st.session_state.get("_iniciar_indexado"):
+        pendientes = st.session_state.pop("_iniciar_indexado")
+        total = len(pendientes)
+        
+        progreso = st.progress(0, text=f"⚡ Iniciando indexación de {total} archivos...")
+        
+        try:
+            from rag_pipeline import add_documents_incremental as _adi
+            for i, archivo in enumerate(pendientes):
+                progreso.progress(i / total, text=f"⚡ Indexando {i+1}/{total}: **{archivo}**...")
+                ruta = os.path.join(docs_dir, archivo)
+                # Pasar vs para reutilizar la conexión
+                vs = _adi([ruta], vs_existente=vs)
+            
+            progreso.progress(1.0, text="✅ ¡Todos los archivos indexados!")
+            import time
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error indexando: {str(e)[:200]}")
 
-                nuevo_vs = build_vector_store(force_rebuild=True)
-                st.session_state["vector_store"] = nuevo_vs
-                st.success(f"✅ ¡Base vectorial reconstruida — {nuevo_vs._collection.count()} vectores!")
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-        st.rerun()
+    if _vectores_huerfanos:
+        st.caption(f"ℹ️ {len(_vectores_huerfanos)} archivo(s) eliminado(s) aún tienen vectores — usa Reparar DB")
+
+    st.markdown("---")
+    with st.expander("🛠️ Reparar / Reconstruir DB completa", expanded=False):
+        st.caption("⚠️ Úsalo solo si la base está corrupta o quieres reiniciar todo desde cero. Tarda 2-5 minutos y usa cuota de API.")
+        if st.button("🔄 Reconstruir VectorDB", use_container_width=True):
+            with st.spinner("🔬 Leyendo PDFs → Chunks → Vectorizando → ChromaDB..."):
+                try:
+                    get_vector_store.clear()  # Limpiar caché antes de borrar
+                    nuevo_vs = build_vector_store(force_rebuild=True)
+                    n = nuevo_vs._collection.count()
+                    st.success(f"✅ ¡Listo! {n} vectores indexados correctamente.")
+                    import time; time.sleep(1)
+                except Exception as e:
+                    st.error(f"❌ Error en rebuild: {str(e)[:300]}")
+                    import time; time.sleep(2)
+            st.rerun()
 
     # Historial en sidebar
     if st.session_state.historial:
@@ -412,7 +479,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-vs = st.session_state["vector_store"]
+# vs ya está definido arriba — conexión fresca del disco
 
 # ── Auto-detección de base vacía ──
 try:
@@ -575,5 +642,19 @@ Universidad Konrad Lorenz
                 )
 
         except Exception as e:
-            st.error(f"❌ Error al procesar la consulta: {str(e)}")
-            st.info("💡 Intenta reformular tu pregunta o reconstruye la base vectorial desde el panel lateral.")
+            err_str = str(e)
+            # Auto-recuperacion del error 1032 (SQLITE_READONLY_DBMOVED)
+            # Ocurre cuando la conexion ChromaDB queda invalida tras operaciones de escritura
+            if "1032" in err_str or "readonly" in err_str.lower() or "read-only" in err_str.lower():
+                try:
+                    vs_fresh = get_vector_store()
+                    with st.spinner("🔄 Reconectando base vectorial..."):
+                        resultado = consultar(pregunta, vs_fresh, k=k_chunks)
+                    st.success("✅ Reconexión exitosa")
+                    st.rerun()
+                except Exception as e2:
+                    st.error(f"❌ Error de base de datos: {str(e2)[:200]}")
+                    st.info("💡 Recarga la página con Cmd+Shift+R para restablecer la conexión.")
+            else:
+                st.error(f"❌ Error al procesar la consulta: {err_str[:200]}")
+                st.info("💡 Intenta reformular tu pregunta o recarga la página.")

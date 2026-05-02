@@ -29,7 +29,15 @@ os.environ["GOOGLE_API_KEY"] = API_KEY
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.path.join(BASE_DIR, "Docs")
-PDF_FILES = [os.path.join(DOCS_DIR, f) for f in os.listdir(DOCS_DIR) if f.lower().endswith(".pdf")]
+# PDF_FILES es dinámico — se lee en cada llamada para capturar archivos nuevos
+def _get_pdf_files():
+    if not os.path.exists(DOCS_DIR):
+        return []
+    return sorted([
+        os.path.join(DOCS_DIR, f)
+        for f in os.listdir(DOCS_DIR)
+        if f.lower().endswith(".pdf")
+    ])
 
 PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db")
 COLLECTION_NAME = "neuroanatomia_cientifica"
@@ -37,9 +45,9 @@ COLLECTION_NAME = "neuroanatomia_cientifica"
 # ─────────────────────────────────────────────
 # 2. MODELOS
 # ─────────────────────────────────────────────
-# Modelo de embeddings: gemini-embedding-2-preview (cupo propio, separado de gemini-embedding-001)
+# Modelo de embeddings: gemini-embedding-001 (cambiado porque gemini-embedding-2-preview agotó su cuota de 1000 requests)
 embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-2-preview",
+    model="models/gemini-embedding-001",
     google_api_key=API_KEY,
 )
 
@@ -140,10 +148,11 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
         shutil.copytree(PERSIST_DIR, BACKUP_DIR)
         print(f"[BACKUP] DB respaldada en {os.path.basename(BACKUP_DIR)}/")
 
-    # PASO 1 — Carga de documentos PDF
-    print("\n[PASO 1] Cargando PDFs de neuroanatomía...")
+    # PASO 1 — Carga de documentos PDF (lectura dinámica de Docs/)
+    pdf_files = _get_pdf_files()
+    print(f"\n[PASO 1] Cargando PDFs de neuroanatomía... ({len(pdf_files)} archivos en Docs/)")
     documents = []
-    for pdf_path in PDF_FILES:
+    for pdf_path in pdf_files:
         if not os.path.exists(pdf_path):
             print(f"  [!] Archivo no encontrado: {os.path.basename(pdf_path)}")
             continue
@@ -165,10 +174,10 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
 
     # PASO 3 & 4 — Embeddings + ChromaDB en carpeta TEMPORAL (la original no se toca hasta el éxito)
     print("\n[PASO 3 & 4] Vectorizando hacia carpeta temporal (la DB original queda intacta hasta confirmar éxito)...")
-    print("  (capa gratuita: lotes de 50, pausa 90s, reintento automático en 429)")
+    print("  (lotes de 100 fragmentos, pausa 5s entre lotes, reintento automático en 429)")
 
-    BATCH_SIZE = 50
-    PAUSE_SECONDS = 90
+    BATCH_SIZE = 100
+    PAUSE_SECONDS = 5
     MAX_RETRIES = 3
     vector_store = None
 
@@ -196,7 +205,7 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or \
                    "503" in err_str or "UNAVAILABLE" in err_str:
-                    espera = PAUSE_SECONDS * intento  # 90s, 180s, 270s
+                    espera = 30 * intento  # 30s, 60s, 90s solo en caso de error real
                     print(f"  ⚠️ Error temporal ({'429' if '429' in err_str else '503'}). Esperando {espera}s (intento {intento}/{MAX_RETRIES})...")
                     time.sleep(espera)
                     if intento == MAX_RETRIES:
@@ -209,9 +218,7 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
                     _restaurar_backup(TEMP_DIR, BACKUP_DIR, PERSIST_DIR)
                     raise
 
-        if i + BATCH_SIZE < len(chunks):
-            print(f"  ⏳ Pausa de {PAUSE_SECONDS}s entre lotes...")
-            time.sleep(PAUSE_SECONDS)
+        # No forzamos pausas, si hay 429 el except se encarga
 
     # ── Swap seguro: cerrar conexión y hacer checkpoint SQLite antes de copiar ──
     total = vector_store._collection.count()
@@ -270,9 +277,132 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
     )
 
 
+# ─────────────────────────────────────────────
+# 4a. ELIMINAR VECTORES DE UN PDF ESPECÍFICO
+# ─────────────────────────────────────────────
+def remove_documents_from_store(pdf_filename: str, vs_existente=None):
+    """
+    Elimina de ChromaDB todos los vectores que provienen del PDF indicado.
+    Usa el campo metadata['source'] para identificarlos.
+    Devuelve (vs, n_eliminados).
+    """
+    vs = vs_existente
+    if vs is None:
+        if not os.path.exists(PERSIST_DIR):
+            return None, 0
+        vs = Chroma(
+            persist_directory=PERSIST_DIR,
+            embedding_function=embeddings_model,
+            collection_name=COLLECTION_NAME,
+        )
+
+    # Buscar todos los IDs cuyo metadata['source'] contenga el nombre del PDF
+    todos = vs._collection.get(include=["metadatas"])
+    ids_a_borrar = [
+        doc_id
+        for doc_id, meta in zip(todos["ids"], todos["metadatas"])
+        if meta and pdf_filename in (meta.get("source", ""))
+    ]
+
+    if ids_a_borrar:
+        vs._collection.delete(ids=ids_a_borrar)
+        print(f"  ✔ {len(ids_a_borrar)} vectores eliminados de '{pdf_filename}'")
+    else:
+        print(f"  [!] No se encontraron vectores para '{pdf_filename}'")
+
+    total = vs._collection.count()
+    print(f"  ✔ DB ahora tiene {total} vectores totales")
+    # El backup permanente NO se actualiza aqui (evita error 1032 SQLITE_READONLY_DBMOVED)
+    # Solo se actualiza en el rebuild completo donde se cierra la conexion antes de copiar
+    return vs, len(ids_a_borrar)
+
 
 # ─────────────────────────────────────────────
-# 5. PIPELINE RAG — CONSULTA
+# 4b. INDEXACIÓN INCREMENTAL — solo archivos nuevos
+# ─────────────────────────────────────────────
+def add_documents_incremental(new_pdf_paths: list, vs_existente=None):
+    """
+    Agrega solo los archivos nuevos a la base vectorial existente.
+    Si se pasa vs_existente (objeto Chroma ya abierto), lo reutiliza
+    para evitar el error de doble conexion SQLite (codigo 1032).
+    """
+    BATCH_SIZE = 100
+    MAX_RETRIES = 3
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600, chunk_overlap=80,
+        separators=["\n\n", "\n", ".", " "],
+    )
+
+    # Cargar y chunkear solo los nuevos PDFs
+    documents = []
+    for pdf_path in new_pdf_paths:
+        if not os.path.exists(pdf_path):
+            print(f"  [!] No encontrado: {os.path.basename(pdf_path)}")
+            continue
+        loader = PyPDFLoader(pdf_path)
+        pages = loader.load()
+        documents.extend(pages)
+        print(f"  ✔ {os.path.basename(pdf_path)}: {len(pages)} páginas")
+
+    if not documents:
+        raise ValueError("No se pudo cargar ningún documento de los archivos dados.")
+
+    chunks = splitter.split_documents(documents)
+    print(f"  Fragmentos nuevos: {len(chunks)}")
+
+    # Reutilizar conexion existente si se pasa (evita error 1032 de doble conexion)
+    vs = vs_existente
+    if vs is None and os.path.exists(PERSIST_DIR):
+        vs = Chroma(
+            persist_directory=PERSIST_DIR,
+            embedding_function=embeddings_model,
+            collection_name=COLLECTION_NAME,
+            collection_metadata={"hnsw:space": "cosine"},
+        )
+
+    for i in range(0, len(chunks), BATCH_SIZE):
+        lote = chunks[i:i + BATCH_SIZE]
+        numero_lote = i // BATCH_SIZE + 1
+        total_lotes = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
+        print(f"  Lote {numero_lote}/{total_lotes}: fragmentos {i+1}–{min(i+BATCH_SIZE, len(chunks))}...")
+
+        for intento in range(1, MAX_RETRIES + 1):
+            try:
+                if vs is None:
+                    vs = Chroma.from_documents(
+                        documents=lote,
+                        embedding=embeddings_model,
+                        persist_directory=PERSIST_DIR,
+                        collection_name=COLLECTION_NAME,
+                        collection_metadata={"hnsw:space": "cosine"},
+                    )
+                else:
+                    vs.add_documents(lote)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    espera = 15 * intento  # 15s, 30s max — falla rápido en UI
+                    print(f"  ⚠️ 429 — esperando {espera}s...")
+                    time.sleep(espera)
+                    if intento == MAX_RETRIES:
+                        raise RuntimeError(
+                            "Cuota de embeddings agotada (límite diario gratuito). "
+                            "Se resetea automáticamente mañana. "
+                            "O genera una nueva API Key en https://aistudio.google.com/apikey"
+                        ) from e
+                else:
+                    raise
+
+        # Sin pausas forzadas entre lotes para maximizar velocidad
+
+    total = vs._collection.count()
+    print(f"  ✔ DB ahora tiene {total} vectores totales")
+    # El backup permanente NO se actualiza aqui (evita error 1032 SQLITE_READONLY_DBMOVED)
+    # Solo se actualiza en el rebuild completo donde se cierra la conexion antes de copiar
+    return vs
+
 # ─────────────────────────────────────────────
 def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
     """
