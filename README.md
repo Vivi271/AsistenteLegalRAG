@@ -1,144 +1,233 @@
 # 🧠 Consultor Especialista en Neuroanatomía (RAG)
 
-Sistema de IA que actúa como consultor científico especializado en neuroanatomía. Responde preguntas basándose **exclusivamente** en los artículos científicos cargados como base de conocimientos, usando la arquitectura **RAG (Retrieval-Augmented Generation)** con almacenamiento vectorial local.
+Sistema de IA que actúa como **consultor científico especializado en neuroanatomía**. Responde preguntas basándose **exclusivamente** en los artículos científicos cargados como base de conocimientos, usando la arquitectura **RAG (Retrieval-Augmented Generation)** con almacenamiento vectorial local.
 
 **Desarrollado por:**
-*   **Viviana García** — Konrad Lorenz
-*   **Braian Ramirez** — Konrad Lorenz
+- **Viviana García** — Universidad Konrad Lorenz
+- **Braian Ramírez** — Universidad Konrad Lorenz
 
 ---
 
-## 🏗️ Arquitectura del Sistema — Flujo RAG Completo
+## 📌 Descripción del Proyecto
 
-El pipeline procesa los documentos científicos en **8 pasos** encadenados:
+Sistema RAG (Retrieval-Augmented Generation) local que procesa artículos científicos de neuroanatomía en formato PDF, los vectoriza mediante modelos de embeddings de Gemini, y permite realizar consultas en lenguaje natural respondidas exclusivamente con información de los documentos cargados.
+
+**Preservación de privacidad:** La base vectorial se almacena completamente en disco local (ChromaDB con SQLite), sin enviar documentos a servidores externos.
+
+---
+
+## 🏗️ Flujo del Sistema RAG — Implementación Completa
+
+El pipeline procesa documentos y consultas en **8 pasos encadenados**:
 
 ```
-📄 PDFs Científicos (Neuroanatomía)
- │
- ▼
- ✂️  PASO 1 — Carga de documentos (PyPDFLoader)
- │
- ▼
- 🧩 PASO 2 — División en fragmentos (Chunking)
- │           chunk_size=600 · overlap=80
- ▼
- 🔢 PASO 3 — Generación de Embeddings
- │           modelo: gemini-embedding-001
- ▼
- 🗄️  PASO 4 — Base Vectorial local (ChromaDB)
- │           similitud coseno · persistente en disco
- ▼
- ❓  Consulta del usuario
- │
- ▼
- 🔍 PASO 5 — Recuperación vectorial (k=5 fragmentos)
- │
- ▼
- 📝 PASO 6 — Construcción del Prompt Aumentado
- │           contexto inyectado con delimitadores XML
- ▼
- 🤖 PASO 7 — LLM generador (gemini-1.5-flash · T=0.1)
- │           respuesta anclada al contexto
- ▼
- 📊 PASO 8 — Evaluación con RAGAS
-             faithfulness · answer_relevancy · context_precision
+╔══════════════════════════════════════════════════════════╗
+║           FASE 1: INDEXACIÓN (Offline)                  ║
+╠══════════════════════════════════════════════════════════╣
+║                                                          ║
+║  📄 Carpeta Docs/  →  Detección automática de PDFs      ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 1] Carga de Documentos                           ║
+║           PyPDFLoader — extrae texto página a página     ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 2] Chunking (División en Fragmentos)             ║
+║           RecursiveCharacterTextSplitter                 ║
+║           chunk_size=600 · overlap=80 caracteres         ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 3] Generación de Embeddings                      ║
+║           Modelo: gemini-embedding-2-preview             ║
+║           Vectores de 3072 dimensiones por fragmento     ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 4] Base Vectorial Local                          ║
+║           ChromaDB (SQLite) · similitud coseno           ║
+║           Persistente en disco: chroma_neuro_db/         ║
+║                                                          ║
+╠══════════════════════════════════════════════════════════╣
+║           FASE 2: CONSULTA (Online/Tiempo Real)         ║
+╠══════════════════════════════════════════════════════════╣
+║                                                          ║
+║  ❓ Pregunta del usuario (lenguaje natural)              ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 5] Recuperación Vectorial (Retrieval)            ║
+║           Búsqueda por similitud semántica               ║
+║           k fragmentos más relevantes (ajustable 3-8)    ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 6] Construcción del Prompt Aumentado             ║
+║           Contexto inyectado con delimitadores XML        ║
+║           <contexto> + <pregunta> estructurados          ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 7] Generación con LLM                            ║
+║           Google Gemini 1.5 / 2.5 Flash                  ║
+║           Respuesta anclada al contexto con citas        ║
+║         │                                                ║
+║         ▼                                                ║
+║  [PASO 8] Presentación y Evaluación                     ║
+║           Respuesta con fuentes · métricas de uso        ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
 ```
+
+---
+
+## 🧠 Ingeniería de Prompts
+
+### System Prompt (Identidad del Consultor)
+
+```python
+SYSTEM_INSTRUCTION = """Eres un consultor especialista en neuroanatomía con formación
+en investigación científica. Tu misión es responder preguntas EXCLUSIVAMENTE
+basándote en la información del <contexto>.
+
+REGLAS ESTRICTAS (de mayor a menor prioridad):
+1. Si la <pregunta> es un saludo o NO es una pregunta científica, responde SOLO con:
+   "Por favor, formula una pregunta específica sobre el contenido de los artículos."
+2. Si la respuesta NO está en el contexto, responde:
+   "Esta información no se encuentra en los documentos científicos disponibles."
+3. Si la respuesta SÍ está en el contexto:
+   - Responde de forma científica y precisa
+   - Cita SIEMPRE el artículo y página de donde proviene la información
+   - Usa terminología médica apropiada
+   - Estructura la respuesta con secciones claras si aplica
+"""
+```
+
+### Prompt Aumentado (Template RAG)
+
+```python
+prompt = f"""
+<contexto>
+{fragmentos_recuperados}
+</contexto>
+
+<pregunta>
+{consulta_del_usuario}
+</pregunta>
+
+Responde basándote EXCLUSIVAMENTE en el contexto anterior.
+Cita el artículo fuente y la página para cada afirmación.
+"""
+```
+
+### Configuración del Sistema (Generation Config)
+
+```python
+config = genai_types.GenerateContentConfig(
+    system_instruction=SYSTEM_INSTRUCTION,
+    temperature=0.1,       # Respuestas deterministas y precisas
+    max_output_tokens=2048, # Respuestas completas sin truncar
+    top_p=0.8,             # Control de diversidad de tokens
+)
+```
+
+### Formato de Salida
+
+Las respuestas siguen esta estructura obligatoria:
+- **Respuesta directa** basada en el contexto recuperado
+- **Citas** con formato: `(Título del artículo, p. X)`
+- **Advertencia** si la información no está en los documentos
+
+---
+
+## ⚙️ Configuración del Sistema RAG
+
+| Parámetro | Valor | Descripción |
+|-----------|-------|-------------|
+| `chunk_size` | 600 | Caracteres por fragmento |
+| `chunk_overlap` | 80 | Superposición entre fragmentos para contexto |
+| `embedding_model` | `gemini-embedding-2-preview` | Modelo de vectorización |
+| `embedding_dims` | 3072 | Dimensiones del vector |
+| `llm_model` | `gemini-2.5-flash-preview-04-17` | Modelo generador |
+| `temperature` | 0.1 | Precisión sobre creatividad |
+| `k_retrieval` | 5 (ajustable 3-8) | Fragmentos recuperados por consulta |
+| `similarity` | Coseno | Métrica de similitud vectorial |
+| `vector_db` | ChromaDB (SQLite) | Base vectorial local |
+| `batch_size` | 50 | Fragmentos por lote de vectorización |
 
 ---
 
 ## 🗂️ Estructura del Proyecto
 
 ```
-AsistenteLegalRAG/
+ConsultorNeuroanatomia/
 │
-├── app.py                      # Interfaz Streamlit del consultor
-├── asistente_legal.py          # Pipeline RAG (chunks, embeddings, ChromaDB, consulta)
+├── app.py                      # Interfaz Streamlit — UI completa
+├── rag_pipeline.py             # Pipeline RAG completo (Indexación + Consulta)
+├── Flujo_RAG_Evaluacion.ipynb  # Notebook de evaluación del sistema
 │
-├── 0717-9502-ijmorphol-41-04-996.pdf   # Artículo 1 — International J. of Morphology
-├── SCT_2025_1250.pdf                    # Artículo 2 — Surgical & Clinical Trials
-├── circir_25_93_2_197-201.pdf           # Artículo 3 — Cirugía y Cirujanos
+├── Docs/                       # Base de conocimientos (PDFs)
+│   ├── 0717-9502-ijmorphol-41-04-996.pdf   # Regla Simple - Aprendizaje Neuroanatomía
+│   ├── SCT_2025_1250.pdf                    # Tecnologías Inmersivas en Enseñanza
+│   ├── circir_25_93_2_197-201.pdf           # Modelos 3D y Realidad Aumentada
+│   └── BASE_DE_DATOS_60_.pdf               # Base de Datos de Neuroanatomía
 │
-├── chroma_neuro_db/            # Base vectorial local (generada automáticamente)
-├── Flujo_RAG_Evaluacion.ipynb  # Notebook de evaluación con RAGAS
-├── Evaluacion_RAG.md           # Reporte de métricas de evaluación
+├── chroma_neuro_db/            # Base vectorial persistente (generada automáticamente)
+├── .streamlit/config.toml      # Configuración de tema y UI
 ├── requirements.txt            # Dependencias del proyecto
-└── .env                        # API Key (no subir a GitHub)
+├── .env                        # Variables de entorno (NO incluido en git)
+├── .gitignore                  # Exclusiones de control de versiones
+└── README.md                   # Este archivo
 ```
 
 ---
 
-## 🛠️ Tecnologías Utilizadas
+## 🚀 Instalación y Ejecución
 
-| Componente | Tecnología |
-|---|---|
-| **Lenguaje** | Python 3.9+ |
-| **Frontend** | Streamlit (CSS personalizado dark-mode) |
-| **LLM generador** | Google Gemini 1.5 Flash (`langchain-google-genai`) |
-| **Embeddings** | Google `embedding-001` |
-| **Base vectorial** | ChromaDB (almacenamiento local persistente) |
-| **Pipeline RAG** | LangChain + LangChain-Chroma |
-| **Lector de PDFs** | PyPDFLoader (`langchain-community`) |
-| **Evaluación** | RAGAS (`faithfulness`, `answer_relevancy`, `context_precision`) |
-| **Variables de entorno** | `python-dotenv` |
+### Prerrequisitos
+- Python 3.11+
+- API Key de Google Gemini ([aistudio.google.com](https://aistudio.google.com/apikey))
 
----
+### Pasos
 
-## 🧠 Ingeniería de Prompts Implementada
-
-El sistema implementa **4 estrategias clave** de Prompt Engineering:
-
-1. **System Instruction:** Identidad de consultor científico con restricción estricta de no usar conocimiento externo al contexto.
-2. **Few-Shot Prompting:** Ejemplos de análisis inyectados en el prompt del sistema para guiar el formato de respuesta científica.
-3. **Delimitadores XML:** Tags `<contexto>` y `<pregunta>` para jerarquizar claramente la información recuperada vs. la consulta del usuario.
-4. **Structured Retrieval (RAG):** Los fragmentos más relevantes se recuperan semánticamente desde ChromaDB y se inyectan como único contexto válido antes de llamar al LLM.
-
----
-
-## 🚀 Guía de Instalación y Uso
-
-### 1. Preparación del Entorno
 ```bash
-# Crear entorno virtual
+# 1. Clonar el repositorio
+git clone <url-del-repo>
+cd ConsultorNeuroanatomia
+
+# 2. Crear entorno virtual
 python3 -m venv env
-source env/bin/activate   # macOS / Linux
-# .\env\Scripts\activate  # Windows
+source env/bin/activate   # macOS/Linux
+# env\Scripts\activate    # Windows
 
-# Instalar dependencias
+# 3. Instalar dependencias
 pip install -r requirements.txt
-```
 
-### 2. Configuración
-Crea o edita el archivo `.env` en la raíz del proyecto:
-```env
-GEMINI_API_KEY=tu_clave_aqui
-```
+# 4. Configurar API Key
+echo "GEMINI_API_KEY=tu_key_aqui" > .env
 
-### 3. Ejecución
-```bash
+# 5. Vectorizar documentos (PRIMERA VEZ — tarda ~5 min)
+python3 -c "from rag_pipeline import build_vector_store; build_vector_store(force_rebuild=True)"
+
+# 6. Iniciar la aplicación
 streamlit run app.py
 ```
-> **Primera ejecución:** El sistema vectorizará automáticamente los 3 PDFs y creará la base ChromaDB. Tarda ~1-2 minutos. Las siguientes ejecuciones cargan instantáneamente desde el disco.
+
+> ⚠️ **Importante:** El paso 5 solo es necesario la primera vez o cuando se agregan nuevos documentos. Desde la app, usa el botón **"Reconstruir VectorDB"** en el panel lateral.
 
 ---
 
-## 📊 Resultados de Evaluación RAGAS
+## 📊 Evaluación del Sistema
 
-| Métrica | Promedio |
-|---|---|
-| `faithfulness` | **1.00** — No se generó ninguna alucinación |
-| `answer_relevancy` | **0.79** — Respuestas pertinentes a la consulta |
-| `context_precision` | **0.30** — Área de mejora: reducir `chunk_size` |
-
-Ver análisis completo → [`Evaluacion_RAG.md`](./Evaluacion_RAG.md)
+El notebook `Flujo_RAG_Evaluacion.ipynb` contiene:
+- Análisis de calidad de fragmentación (chunking)
+- Métricas de recuperación (precisión, cobertura)
+- Pruebas de coherencia de respuestas
+- Ejemplos de consultas con sus respuestas y fuentes
 
 ---
 
-## 📝 Control de Versiones
+## 🔒 Privacidad y Seguridad
 
-| Versión | Tag Git | Descripción |
-|---|---|---|
-| **v1.0** | `v1.0-asistente-legal` | Asistente Legal RAG con Few-Shot y Structured Output |
-| **v2.0** | `main` (actual) | Consultor Neuroanatomía con ChromaDB + RAGAS |
+- Los documentos PDF **nunca se envían** a servidores externos
+- Solo el **texto de los fragmentos** recuperados se envía al LLM (no el PDF completo)
+- La base vectorial es **completamente local** (SQLite en disco)
+- El archivo `.env` con la API Key está excluido del repositorio via `.gitignore`
 
 ---
 

@@ -8,9 +8,16 @@ __pycache__/
 # Archivos de configuración sensible
 .env
 
-# Archivos temporales de Word
-~$*
+# Base vectorial — se genera automáticamente al correr la app
+chroma_neuro_db/
+chroma_neuro_db_temp/
+chroma_neuro_db_backup/
 
-# Otros
+# Archivos duplicados / innecesarios
+FlujoRag.txt
+
+# Archivos temporales de macOS y editores
 .DS_Store
 .vscode/
+~$*
+*.tmp
