@@ -38,13 +38,13 @@ El pipeline procesa documentos y consultas en **8 pasos encadenados**:
 ║         │                                                ║
 ║         ▼                                                ║
 ║  [PASO 3] Generación de Embeddings                      ║
-║           Modelo: gemini-embedding-2-preview             ║
-║           Vectores de 3072 dimensiones por fragmento     ║
+║           Modelo: gemini-embedding-2-preview (3072 dims) ║
+║           Procesado en lotes de 50 · pausa anti-429      ║
 ║         │                                                ║
 ║         ▼                                                ║
 ║  [PASO 4] Base Vectorial Local                          ║
 ║           ChromaDB (SQLite) · similitud coseno           ║
-║           Persistente en disco: chroma_neuro_db/         ║
+║           Local: chroma_neuro_db/ + backup ~/.neuro_db_permanent/ ║
 ║                                                          ║
 ╠══════════════════════════════════════════════════════════╣
 ║           FASE 2: CONSULTA (Online/Tiempo Real)         ║
@@ -64,7 +64,7 @@ El pipeline procesa documentos y consultas en **8 pasos encadenados**:
 ║         │                                                ║
 ║         ▼                                                ║
 ║  [PASO 7] Generación con LLM                            ║
-║           Google Gemini 1.5 / 2.5 Flash                  ║
+║           Gemini (fallback multi-modelo automático)      ║
 ║           Respuesta anclada al contexto con citas        ║
 ║         │                                                ║
 ║         ▼                                                ║
@@ -141,14 +141,14 @@ Las respuestas siguen esta estructura obligatoria:
 |-----------|-------|-------------|
 | `chunk_size` | 600 | Caracteres por fragmento |
 | `chunk_overlap` | 80 | Superposición entre fragmentos para contexto |
-| `embedding_model` | `gemini-embedding-2-preview` | Modelo de vectorización |
-| `embedding_dims` | 3072 | Dimensiones del vector |
-| `llm_model` | `gemini-2.5-flash-preview-04-17` | Modelo generador |
+| `embedding_model` | `gemini-embedding-2-preview` | Modelo de vectorización (3072 dims) |
+| `llm_model` | `gemini-flash-latest` + fallback automático | Intenta múltiples modelos si hay 429 |
 | `temperature` | 0.1 | Precisión sobre creatividad |
 | `k_retrieval` | 5 (ajustable 3-8) | Fragmentos recuperados por consulta |
 | `similarity` | Coseno | Métrica de similitud vectorial |
-| `vector_db` | ChromaDB (SQLite) | Base vectorial local |
+| `vector_db` | ChromaDB (SQLite local) | Base vectorial persistente |
 | `batch_size` | 50 | Fragmentos por lote de vectorización |
+| `backup_permanente` | `~/.neuro_db_permanent/` | Restauración automática si se borra la DB |
 
 ---
 
@@ -161,19 +161,20 @@ ConsultorNeuroanatomia/
 ├── rag_pipeline.py             # Pipeline RAG completo (Indexación + Consulta)
 ├── Flujo_RAG_Evaluacion.ipynb  # Notebook de evaluación del sistema
 │
-├── Docs/                       # Base de conocimientos (PDFs)
+├── Docs/                       # Base de conocimientos (3 artículos PDF)
 │   ├── 0717-9502-ijmorphol-41-04-996.pdf   # Regla Simple - Aprendizaje Neuroanatomía
 │   ├── SCT_2025_1250.pdf                    # Tecnologías Inmersivas en Enseñanza
-│   ├── circir_25_93_2_197-201.pdf           # Modelos 3D y Realidad Aumentada
-│   └── BASE_DE_DATOS_60_.pdf               # Base de Datos de Neuroanatomía
+│   └── circir_25_93_2_197-201.pdf           # Modelos 3D y Realidad Aumentada
 │
-├── chroma_neuro_db/            # Base vectorial persistente (generada automáticamente)
+├── chroma_neuro_db/            # Base vectorial local — 171 vectores (auto-generada)
 ├── .streamlit/config.toml      # Configuración de tema y UI
 ├── requirements.txt            # Dependencias del proyecto
 ├── .env                        # Variables de entorno (NO incluido en git)
 ├── .gitignore                  # Exclusiones de control de versiones
 └── README.md                   # Este archivo
 ```
+
+> 💡 **Backup automático:** La DB se guarda también en `~/.neuro_db_permanent/`. Si la carpeta local desaparece, se restaura automáticamente al iniciar sin necesidad de re-vectorizar.
 
 ---
 

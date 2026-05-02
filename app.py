@@ -232,22 +232,23 @@ except ImportError as e:
     st.stop()
 
 # ── Carga del vector store ANTES del sidebar (para que el conteo sea correcto) ──
-@st.cache_resource(show_spinner=False)
 def get_vector_store():
+    """Carga la DB desde disco. Sin @st.cache_resource para evitar cachear None."""
     try:
         return build_vector_store(force_rebuild=False)
     except FileNotFoundError:
-        return None  # DB no existe aún — app mostrará botón de reconstrucción
+        return None  # DB no existe aún — mostrar botón de reconstrucción
     except Exception as e:
-        # DB corrupta — eliminarla para poder reconstruir limpiamente
-        if any(k in str(e).lower() for k in ["tenant", "default_tenant", "sqlite", "database"]):
+        err = str(e).lower()
+        # SOLO eliminar si es la corrupción específica de ChromaDB "default_tenant"
+        if "default_tenant" in err and "does not exist" in err:
             import shutil as _sh
             _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_neuro_db")
             if os.path.exists(_db):
                 _sh.rmtree(_db)
-        return None  # La app mostrará botón de reconstrucción
+        return None
 
-if "vector_store" not in st.session_state:
+if "vector_store" not in st.session_state or st.session_state["vector_store"] is None:
     st.session_state["vector_store"] = get_vector_store()
 
 # Nombres legibles de PDFs (sidebar + resultados)

@@ -99,14 +99,25 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
     """
     PASO 1-4 del pipeline RAG:
     Carga PDFs → Chunking → Vectorización (Embeddings) → ChromaDB
+
+    Backup permanente en ~/.neuro_db_permanent/ — se restaura automáticamente
+    si la DB local desaparece (git clean, rm -rf accidental, etc.)
     """
+    PERMANENT_BACKUP = os.path.join(os.path.expanduser("~"), ".neuro_db_permanent")
+
     if not force_rebuild:
         # Modo carga: SOLO cargar si existe, NUNCA reconstruir automáticamente
         if not os.path.exists(PERSIST_DIR):
-            raise FileNotFoundError(
-                "Base vectorial no encontrada. "
-                "Usa el botón 'Reconstruir VectorDB' para crearla."
-            )
+            # ── Intentar restaurar desde backup permanente antes de fallar ──
+            if os.path.exists(PERMANENT_BACKUP):
+                print(f"[RESTORE] DB no encontrada localmente. Restaurando desde backup permanente...")
+                shutil.copytree(PERMANENT_BACKUP, PERSIST_DIR)
+                print(f"[RESTORE] ✔ DB restaurada desde ~/.neuro_db_permanent/")
+            else:
+                raise FileNotFoundError(
+                    "Base vectorial no encontrada. "
+                    "Usa el botón 'Reconstruir VectorDB' para crearla."
+                )
         print(f"[OK] Cargando base vectorial existente desde: {PERSIST_DIR}")
         return Chroma(
             persist_directory=PERSIST_DIR,
@@ -240,6 +251,17 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
 
     print(f"  ✔ DB actualizada en {os.path.basename(PERSIST_DIR)}/ — {total} vectores indexados")
 
+    # ── Guardar backup PERMANENTE en home (~/.neuro_db_permanent/) ──
+    # Este backup sobrevive a git clean, rm -rf en el proyecto, etc.
+    try:
+        PERMANENT_BACKUP = os.path.join(os.path.expanduser("~"), ".neuro_db_permanent")
+        if os.path.exists(PERMANENT_BACKUP):
+            shutil.rmtree(PERMANENT_BACKUP)
+        shutil.copytree(PERSIST_DIR, PERMANENT_BACKUP)
+        print(f"  ✔ Backup permanente guardado en ~/.neuro_db_permanent/ ({total} vectores)")
+    except Exception as _e:
+        print(f"  [WARN] No se pudo guardar backup permanente: {_e}")
+
     # Devolver instancia apuntando a la carpeta real
     return Chroma(
         persist_directory=PERSIST_DIR,
@@ -280,13 +302,38 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
         + PROMPT_TEMPLATE.format(context=context, question=pregunta)
     )
 
-    # PASO 7 — Generación con gemini-flash-latest (mayor cuota diaria)
-    response = _genai_client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=prompt_completo,
-        config=genai_types.GenerateContentConfig(temperature=0.1),
-    )
-    texto = response.text or ""
+    # PASO 7 — Generación LLM via REST (intenta modelos en orden de disponibilidad)
+    import requests as _req
+    _llm_models = [
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+        "gemini-2.5-flash-preview-04-17",
+    ]
+    _body = {
+        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "contents": [{"parts": [{"text": PROMPT_TEMPLATE.format(context=context, question=pregunta)}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+    }
+    texto = ""
+    for _model in _llm_models:
+        _url = f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent?key={API_KEY}"
+        _resp = _req.post(_url, json=_body, timeout=30)
+        if _resp.status_code == 200:
+            texto = _resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            break
+        elif _resp.status_code == 429:
+            continue  # cuota agotada → probar siguiente modelo
+        else:
+            err = _resp.json().get("error", {}).get("message", "")
+            if "not found" in err.lower() or "404" in str(_resp.status_code):
+                continue  # modelo no disponible → probar siguiente
+            raise RuntimeError(f"Error LLM ({_resp.status_code}): {err[:120]}")
+    if not texto:
+        raise RuntimeError(
+            "Cuota LLM agotada en todos los modelos disponibles. "
+            "Por favor agrega una nueva GEMINI_API_KEY en el archivo .env y reinicia la app."
+        )
 
     return {
         "pregunta": pregunta,
