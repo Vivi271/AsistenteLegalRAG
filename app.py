@@ -89,11 +89,6 @@ section[data-testid="stSidebar"] {
 }
 
 /* Response Card with Glassmorphism */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
 .response-card {
     background: var(--bg-glass);
     backdrop-filter: blur(16px);
@@ -107,7 +102,6 @@ section[data-testid="stSidebar"] {
     line-height: 1.8;
     font-size: 1.05rem;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    animation: fadeInUp 0.6s ease-out forwards;
 }
 
 /* Metrics row */
@@ -116,7 +110,6 @@ section[data-testid="stSidebar"] {
     gap: 12px;
     margin-top: 20px;
     flex-wrap: wrap;
-    animation: fadeInUp 0.8s ease-out forwards;
 }
 
 .metric-chip {
@@ -793,20 +786,19 @@ with tab_consultor:
                 st.markdown("---")
                 st.markdown("### 📋 Síntesis del Consultor")
 
-                respuesta_segura = html_module.escape(resultado["respuesta"]).replace("\n", "<br>")
-                st.markdown(
-                    f'<div class="response-card">{respuesta_segura}</div>',
-                    unsafe_allow_html=True,
-                )
+                # Usar contenedor nativo de Streamlit para evitar el bug
+                # NotFoundError: removeChild que ocurre con animaciones CSS + re-render
+                with st.container(border=True):
+                    st.markdown(
+                        resultado["respuesta"],
+                        unsafe_allow_html=False,
+                    )
 
-                st.markdown(f"""
-                <div class="metric-row">
-                    <span class="metric-chip">📄 {len(resultado["fragmentos"])} chunks recuperados</span>
-                    <span class="metric-chip">⚡ ~{resultado["tokens_contexto_aprox"]} tokens de contexto</span>
-                    <span class="metric-chip">🧠 Gemini Flash</span>
-                    <span class="metric-chip">⏱️ Temp: 0.1</span>
-                </div>
-                """, unsafe_allow_html=True)
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                col_m1.markdown(f"<span class='metric-chip'>📄 {len(resultado['fragmentos'])} chunks recuperados</span>", unsafe_allow_html=True)
+                col_m2.markdown(f"<span class='metric-chip'>⚡ ~{resultado['tokens_contexto_aprox']} tokens</span>", unsafe_allow_html=True)
+                col_m3.markdown("<span class='metric-chip'>🧠 Gemini Flash</span>", unsafe_allow_html=True)
+                col_m4.markdown("<span class='metric-chip'>⏱️ Temp: 0.1</span>", unsafe_allow_html=True)
 
                 SALUDOS = {"hola", "hello", "hi", "buenas", "buenos días", "buenas tardes",
                            "buenas noches", "gracias", "de nada", "ok", "okay", "sí", "no",

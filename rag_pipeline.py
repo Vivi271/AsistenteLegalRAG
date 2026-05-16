@@ -435,10 +435,10 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
     # PASO 7 — Generación LLM via REST (intenta modelos en orden de disponibilidad)
     import requests as _req
     _llm_models = [
-        "gemini-2.0-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-flash-latest",
-        "gemini-2.5-flash-preview-04-17",
     ]
     _body = {
         "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
