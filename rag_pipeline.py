@@ -486,9 +486,10 @@ if __name__ == "__main__":
     preguntas_prueba = [
         "¿Cuáles son las principales estructuras neuroanatómicas descritas?",
         "¿Qué hallazgos morfológicos o histológicos se reportan?",
-        "¿Qué metodología de investigación utilizaron los autores?",
-        "¿Cuáles son las conclusiones principales de los artículos?",
-        "¿Qué variaciones anatómicas se identificaron en los estudios?",
+        # Prueba de Similitud de Coseno (Lenguaje coloquial -> Científico)
+        "¿Es útil usar gafas de videojuegos o de compu para estudiar la cabeza o el cerebro?",
+        # Prueba de Alucinación (Fuera de contexto / Veracidad)
+        "¿Cuál es la dosis de anestesia recomendada para una cirugía de columna?",
     ]
 
     for pregunta in preguntas_prueba:
