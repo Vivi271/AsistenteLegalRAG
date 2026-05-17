@@ -64,11 +64,12 @@ REGLAS ESTRICTAS (de mayor a menor prioridad):
 1. Si la <pregunta> es un saludo, una expresión social (hola, gracias, qué tal, etc.) o NO es una pregunta científica, responde Únicamente con:
    "Por favor, formula una pregunta específica sobre el contenido de los artículos científicos. Ejemplo: ¿Qué estructuras neuroanatómicas se describen?"
    No agregues nada más. No resumas los documentos. No menciones su contenido.
-2. Si la respuesta a una pregunta científica NO está en el contexto, responde:
+2. Si el contexto contiene información RELACIONADA con la pregunta (aunque no responda exactamente cada detalle), sintetiza y presenta la información disponible con sus fuentes. No exijas datos exactos si hay información relevante sobre el tema.
+3. Solo si el tema de la pregunta NO aparece de ninguna forma en el contexto, responde:
    "Esta información no se encuentra en los documentos científicos disponibles."
-3. Siempre cita la fuente (nombre del PDF y página) al final de cada respuesta científica.
-4. Usa terminología científica precisa. Nunca uses conocimiento externo a los documentos.
-5. Si se necesita combinar información de varios fragmentos, intégralos de forma coherente."""
+4. Siempre cita la fuente (nombre del PDF y página) al final de cada respuesta científica.
+5. Usa terminología científica precisa. Nunca uses conocimiento externo a los documentos.
+6. Si se necesita combinar información de varios fragmentos, intégralos de forma coherente."""
 
 PROMPT_TEMPLATE = """
 <contexto>
@@ -79,8 +80,13 @@ PROMPT_TEMPLATE = """
 {question}
 </pregunta>
 
-Responde como consultor científico especialista en neuroanatomía basándote EXCLUSIVAMENTE
-en el contexto anterior. Al final, indica en qué fuente(s) encontraste la información."""
+Instrucciones para responder:
+- Si el contexto contiene información que RESPONDE DIRECTAMENTE la pregunta, preséntala de forma organizada.
+- Si el contexto contiene información RELACIONADA con el tema (aunque no sea la respuesta exacta), sintetiza esa información disponible como la mejor evidencia encontrada en los documentos.
+- SOLO si el tema no aparece de ninguna forma en el contexto, responde que no se encuentra la información.
+- Siempre indica en qué fuente(s) y página(s) encontraste la información.
+- No uses conocimiento externo a los documentos.
+"""
 
 
 # ─────────────────────────────────────────────
@@ -452,11 +458,13 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
         if _resp.status_code == 200:
             texto = _resp.json()["candidates"][0]["content"]["parts"][0]["text"]
             break
-        elif _resp.status_code == 429:
-            continue  # cuota agotada → probar siguiente modelo
+        elif _resp.status_code in (429, 503):
+            continue  # cuota agotada o modelo sobrecargado → probar siguiente
         else:
             err = _resp.json().get("error", {}).get("message", "")
-            if "not found" in err.lower() or "404" in str(_resp.status_code):
+            # También hacer fallback si el modelo no está disponible o está sobrecargado
+            if ("not found" in err.lower() or "404" in str(_resp.status_code)
+                    or "overload" in err.lower() or "unavailable" in err.lower()):
                 continue  # modelo no disponible → probar siguiente
             raise RuntimeError(f"Error LLM ({_resp.status_code}): {err[:120]}")
     if not texto:

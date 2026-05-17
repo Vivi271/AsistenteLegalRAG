@@ -782,73 +782,73 @@ with tab_consultor:
             try:
                 with st.spinner("🧬 Analizando vectores y sintetizando respuesta..."):
                     resultado = consultar(pregunta, vs, k=k_chunks)
+                # Guardar en session_state — el render ocurre abajo, siempre en el DOM
+                st.session_state["_ultimo_resultado"] = resultado
+                st.session_state["_ultima_pregunta"] = pregunta
+            except Exception as e:
+                err_str = str(e)
+                if "1032" in err_str or "readonly" in err_str.lower():
+                    try:
+                        vs_fresh = get_vector_store()
+                        with st.spinner("🔄 Reconectando base vectorial..."):
+                            resultado = consultar(pregunta, vs_fresh, k=k_chunks)
+                        st.session_state["_ultimo_resultado"] = resultado
+                        st.session_state["_ultima_pregunta"] = pregunta
+                    except Exception as e2:
+                        st.error(f"❌ Error de base de datos: {str(e2)[:200]}")
+                        st.info("💡 Recarga la página con Cmd+Shift+R.")
+                else:
+                    st.error(f"❌ Error: {err_str[:200]}")
+                    st.info("💡 Intenta reformular tu pregunta o recarga la página.")
 
-                st.markdown("---")
-                st.markdown("### 📋 Síntesis del Consultor")
+    # ── Render del resultado SIEMPRE presente en el DOM (fix definitivo removeChild) ──
+    if st.session_state.get("_ultimo_resultado"):
+        resultado  = st.session_state["_ultimo_resultado"]
+        preg_guard = st.session_state.get("_ultima_pregunta", "")
 
-                # Usar contenedor nativo de Streamlit para evitar el bug
-                # NotFoundError: removeChild que ocurre con animaciones CSS + re-render
-                with st.container(border=True):
-                    st.markdown(
-                        resultado["respuesta"],
-                        unsafe_allow_html=False,
-                    )
+        NO_INFO_PHRASES = [
+            "no se encuentra en los documentos", "no está en los documentos",
+            "no hay información", "no tengo información",
+            "plantee su consulta", "formula una pregunta",
+            "pregunta específica", "no encontr",
+        ]
+        SALUDOS = {"hola","hello","hi","buenas","buenos días","buenas tardes",
+                   "buenas noches","gracias","de nada","ok","okay","sí","no",
+                   "perfecto","genial","bien","mal","cómo estás","adios","bye"}
+        es_respuesta_sin_info = any(p in resultado["respuesta"].lower() for p in NO_INFO_PHRASES)
+        es_saludo       = any(s in preg_guard.strip().lower() for s in SALUDOS)
+        pregunta_corta  = len(preg_guard.strip()) < 12
+        mostrar_evidencia = not (pregunta_corta or es_saludo or es_respuesta_sin_info)
 
-                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-                col_m1.markdown(f"<span class='metric-chip'>📄 {len(resultado['fragmentos'])} chunks recuperados</span>", unsafe_allow_html=True)
-                col_m2.markdown(f"<span class='metric-chip'>⚡ ~{resultado['tokens_contexto_aprox']} tokens</span>", unsafe_allow_html=True)
-                col_m3.markdown("<span class='metric-chip'>🧠 Gemini Flash</span>", unsafe_allow_html=True)
-                col_m4.markdown("<span class='metric-chip'>⏱️ Temp: 0.1</span>", unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("### 📋 Síntesis del Consultor")
 
-                SALUDOS = {"hola", "hello", "hi", "buenas", "buenos días", "buenas tardes",
-                           "buenas noches", "gracias", "de nada", "ok", "okay", "sí", "no",
-                           "perfecto", "genial", "bien", "mal", "cómo estás", "adios", "bye"}
-                pregunta_corta = len(pregunta.strip()) < 12
-                es_saludo = any(s in pregunta.strip().lower() for s in SALUDOS)
+        if es_respuesta_sin_info:
+            st.warning(resultado["respuesta"])
+            st.success("✅ Sin alucinación — El sistema reconoció el límite de su conocimiento")
+        else:
+            st.info(resultado["respuesta"])
 
-                NO_INFO_PHRASES = [
-                    "no se encuentra en los documentos",
-                    "no está en los documentos",
-                    "no hay información",
-                    "no tengo información",
-                    "plantee su consulta",
-                    "formula una pregunta",
-                    "pregunta específica",
-                    "no encontr",
-                ]
-                es_respuesta_sin_info = any(p in resultado["respuesta"].lower() for p in NO_INFO_PHRASES)
-                mostrar_evidencia = not (pregunta_corta or es_saludo or es_respuesta_sin_info)
+        st.caption(
+            f"📄 {len(resultado['fragmentos'])} chunks recuperados · "
+            f"⚡ ~{resultado['tokens_contexto_aprox']} tokens · "
+            f"🧠 Gemini · ⏱️ Temp: 0.1"
+        )
 
-                # Badge anti-alucinación
-                if es_respuesta_sin_info:
-                    st.markdown("""
-                    <div style="display:inline-flex; align-items:center; gap:8px;
-                                background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.5);
-                                border-radius:20px; padding:6px 16px; margin-top:12px;
-                                font-size:0.88rem; color:#10b981; font-weight:600;">
-                        ✅ Sin alucinación — El sistema reconoció el límite de su conocimiento
-                    </div>
-                    """, unsafe_allow_html=True)
+        if mostrar_evidencia:
+            st.markdown("### 📚 Evidencia Documental")
+            for i, doc in enumerate(resultado["fragmentos"], 1):
+                file_name = os.path.basename(doc.metadata.get("source", "desconocido"))
+                nombre_revista = mapeo_nombres.get(file_name, file_name)
+                pagina = doc.metadata.get("page", "?")
+                with st.expander(f"📌 Fragmento {i} — {nombre_revista} (Pág. {pagina})"):
+                    st.text(doc.page_content)
 
-                if mostrar_evidencia:
-                    st.markdown("<br>### 📚 Evidencia Documental", unsafe_allow_html=True)
-                    for i, doc in enumerate(resultado["fragmentos"], 1):
-                        file_name = os.path.basename(doc.metadata.get("source", "desconocido"))
-                        nombre_revista = mapeo_nombres.get(file_name, file_name)
-                        pagina = doc.metadata.get("page", "?")
-                        with st.expander(f"📌 Fragmento {i} — {nombre_revista} (Pág. {pagina})"):
-                            st.markdown(
-                                f"<div style='font-size:0.95rem; color:#cbd5e1; line-height:1.6; "
-                                f"padding:10px; background:rgba(0,0,0,0.2); border-radius:8px;'>"
-                                f"{html_module.escape(doc.page_content)}</div>",
-                                unsafe_allow_html=True
-                            )
-
-                fuentes_txt = "\n".join([
-                    f"  [{i+1}] {mapeo_nombres.get(os.path.basename(d.metadata.get('source','?')), os.path.basename(d.metadata.get('source','?')))} — Pág. {d.metadata.get('page','?')}"
-                    for i, d in enumerate(resultado["fragmentos"])
-                ])
-                reporte = f"""=========================================
+        fuentes_txt = "\n".join([
+            f"  [{i+1}] {mapeo_nombres.get(os.path.basename(d.metadata.get('source','?')), os.path.basename(d.metadata.get('source','?')))} — Pág. {d.metadata.get('page','?')}"
+            for i, d in enumerate(resultado["fragmentos"])
+        ])
+        reporte = f"""=========================================
 CONSULTA NEUROANATÓMICA — REPORTE RAG
 =========================================
 FECHA: 2026
@@ -868,30 +868,13 @@ Autores: Viviana García & Braian Ramírez
 Universidad Konrad Lorenz
 =========================================
 """
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                with col_dl2:
-                    st.download_button(
-                        label="📥 Exportar Reporte Académico (TXT)",
-                        data=reporte,
-                        file_name="reporte_neuroanatomia.txt",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
-
-            except Exception as e:
-                err_str = str(e)
-                if "1032" in err_str or "readonly" in err_str.lower() or "read-only" in err_str.lower():
-                    try:
-                        vs_fresh = get_vector_store()
-                        with st.spinner("🔄 Reconectando base vectorial..."):
-                            resultado = consultar(pregunta, vs_fresh, k=k_chunks)
-                        st.success("✅ Reconexión exitosa")
-                        st.rerun()
-                    except Exception as e2:
-                        st.error(f"❌ Error de base de datos: {str(e2)[:200]}")
-                        st.info("💡 Recarga la página con Cmd+Shift+R para restablecer la conexión.")
-                else:
-                    st.error(f"❌ Error al procesar la consulta: {err_str[:200]}")
-                    st.info("💡 Intenta reformular tu pregunta o recarga la página.")
-
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+        with col_dl2:
+            st.download_button(
+                label="📥 Exportar Reporte Académico (TXT)",
+                data=reporte,
+                file_name="reporte_neuroanatomia.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
