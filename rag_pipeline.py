@@ -57,19 +57,42 @@ def _load_any_document(file_path: str) -> list:
             return []
     return []
 
-PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
+OLLAMA_LLM_MODEL = "qwen2.5:1.5b"   # Modelo local por defecto
+
+if GEMINI_API_KEY:
+    os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+    from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+    PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db_gemini")
+    embeddings_model = GoogleGenerativeAIEmbeddings(
+        model="models/text-embedding-004"
+    )
+    print("🚀 [INIT] Modo Híbrido: Inicializando Google Gemini API (Nube)")
+else:
+    PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db")
+    OLLAMA_EMBED_MODEL = "nomic-embed-text"
+    embeddings_model = OllamaEmbeddings(
+        model=OLLAMA_EMBED_MODEL,
+    )
+    print("🧠 [INIT] Modo Híbrido: Inicializando Ollama (Local)")
+
 COLLECTION_NAME = "neuroanatomia_cientifica"
 
-# ─────────────────────────────────────────────
-# 2. MODELOS — 100% LOCAL via Ollama
-# ─────────────────────────────────────────────
-# Modelo de embeddings local: nomic-embed-text (274 MB, sin cuotas)
-OLLAMA_EMBED_MODEL = "nomic-embed-text"
-OLLAMA_LLM_MODEL   = "qwen2.5:1.5b"   # 2 GB — ya instalado. Cambiar a llama3.1:8b o qwen2.5:7b si hay más RAM
-
-embeddings_model = OllamaEmbeddings(
-    model=OLLAMA_EMBED_MODEL,
-)
+def get_llm():
+    if GEMINI_API_KEY:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            temperature=0.1,
+            max_output_tokens=600,
+        )
+    else:
+        return ChatOllama(
+            model=OLLAMA_LLM_MODEL,
+            temperature=0.1,
+            num_predict=600,
+            num_ctx=2048,
+        )
 
 # ─────────────────────────────────────────────
 # 3. SYSTEM PROMPT — Identidad del consultor
@@ -414,13 +437,8 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "ava
         + PROMPT_TEMPLATE.format(context=context, question=pregunta)
     )
 
-    # PASO 7 — Generación LOCAL con Ollama (sin internet, sin cuotas)
-    llm = ChatOllama(
-        model=OLLAMA_LLM_MODEL,
-        temperature=0.1,
-        num_predict=600,   # Límite explícito para respuestas ágiles en CPU Intel
-        num_ctx=2048,      # Ventana de contexto reducida para mayor velocidad
-    )
+    # PASO 7 — Generación Híbrida (Ollama/Gemini)
+    llm = get_llm()
 
     # pyrefly: ignore [missing-import]
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -464,12 +482,7 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
 
     # pyrefly: ignore [missing-import]
     from langchain_core.messages import HumanMessage, SystemMessage
-    llm = ChatOllama(
-        model=OLLAMA_LLM_MODEL,
-        temperature=0.1,
-        num_predict=600,
-        num_ctx=2048,
-    )
+    llm = get_llm()
     messages = [
         SystemMessage(content=system_instruction),
         HumanMessage(content=PROMPT_TEMPLATE.format(context=context, question=pregunta)),
