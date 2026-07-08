@@ -21,18 +21,9 @@ def render_sidebar(vs):
     # --- LOGO KONRAD LORENZ ---
     st.markdown("""
     <div class="kl-badge">
-        <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 8px;">
-            <div style="background: #4a235a; width: 34px; height: 34px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.3rem; color: #ffffff; border: 1px solid rgba(93, 173, 226, 0.4);">K</div>
-            <div style="text-align: left; line-height: 1.1;">
-                <div style="font-size: 0.9rem; font-weight: 800; color: #ffffff; letter-spacing: 0.5px;">KONRAD</div>
-                <div style="font-size: 0.9rem; font-weight: 800; color: #5dade2; letter-spacing: 0.5px;">LORENZ</div>
-            </div>
-        </div>
-        <div style="font-size: 0.62rem; color: #a7f3d0; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;">Fundación Universitaria</div>
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.1);">
-            <div style="font-size: 0.65rem; color: #5dade2; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Acreditación Institucional</div>
-            <div style="font-size: 0.62rem; color: #a7f3d0;">de Alta Calidad</div>
-        </div>
+        <img src="https://colombiaestudia.com/wp-content/uploads/2021/06/logo_Konrad.png" 
+             alt="Konrad Lorenz Fundación Universitaria" 
+             style="max-width: 180px; width: 100%; margin: 0 auto; display: block;">
     </div>
     """, unsafe_allow_html=True)
 
@@ -136,21 +127,22 @@ def render_sidebar(vs):
 
     # ── Parámetros del motor (solo para admin) ──
     if is_admin:
-        st.markdown("### Parámetros del Motor")
-        k_chunks = st.slider("Fragmentos a recuperar (k)", min_value=3, max_value=8, value=5)
-        
-        st.markdown("""
-        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; font-size: 0.82rem; color: #94a3b8; margin-top: 10px;">
-            <b>LLM:</b> qwen2.5:1.5b (Ollama local)
-            <span title="Modelo de lenguaje que corre 100% en tu PC." style="cursor:help; color:#5dade2;"> ℹ️</span><br>
-            <b>Embeddings:</b> nomic-embed-text (local)
-            <span title="Modelo de vectorización local." style="cursor:help; color:#5dade2;"> ℹ️</span><br>
-            <b>Temp:</b> 0.1
-            <span title="Respuestas académicas concretas y deterministas." style="cursor:help; color:#5dade2;"> ℹ️</span>
-            | <b>Chunk:</b> 800
-            | <b>🔒 Sin internet</b>
-        </div>
-        """, unsafe_allow_html=True)
+        with st.container():
+            st.markdown("### Parámetros del Motor")
+            k_chunks = st.slider("Fragmentos a recuperar (k)", min_value=3, max_value=8, value=5, key="admin_slider_k")
+            
+            st.markdown("""
+            <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; font-size: 0.82rem; color: #94a3b8; margin-top: 10px;">
+                <b>LLM:</b> qwen2.5:1.5b (Ollama local)
+                <span title="Modelo de lenguaje que corre 100% en tu PC." style="cursor:help; color:#5dade2;"> ℹ️</span><br>
+                <b>Embeddings:</b> nomic-embed-text (local)
+                <span title="Modelo de vectorización local." style="cursor:help; color:#5dade2;"> ℹ️</span><br>
+                <b>Temp:</b> 0.1
+                <span title="Respuestas académicas concretas y deterministas." style="cursor:help; color:#5dade2;"> ℹ️</span>
+                | <b>Chunk:</b> 800
+                | <b>🔒 Sin internet</b>
+            </div>
+            """, unsafe_allow_html=True)
     else:
         k_chunks = 5
         
@@ -158,93 +150,97 @@ def render_sidebar(vs):
 
     # ── Estado de la base de datos (solo para admin) ──
     if is_admin:
-        st.markdown("<br>", unsafe_allow_html=True)
-        try:
-            _sidebar_count = vs._collection.count() if vs is not None else 0
-        except Exception:
-            _sidebar_count = 0
-            
-        # Detectar archivos sin indexar
-        _docs_files = set(f for f in os.listdir(docs_dir) if f.lower().endswith(('.pdf', '.docx')))
-        if vs is not None and _sidebar_count > 0:
+        with st.container():
+            st.markdown("<br>", unsafe_allow_html=True)
             try:
-                _all_meta = vs._collection.get(include=["metadatas"])
-                _indexados = set(os.path.basename(m.get('source','')) for m in _all_meta["metadatas"])
-                _sin_indexar = _docs_files - _indexados
-                _vectores_huerfanos = _indexados - _docs_files
+                _sidebar_count = vs._collection.count() if vs is not None else 0
             except Exception:
-                _sin_indexar = set()
-                _vectores_huerfanos = set()
-        else:
-            _sin_indexar = _docs_files
-            _vectores_huerfanos = set()
-
-        if not _sin_indexar and _sidebar_count > 0:
-            st.success(f"Lista base — {_sidebar_count} vectores indexados")
-        elif _sin_indexar:
-            if st.session_state.get("_iniciar_indexado"):
-                st.info("Indexando archivos pendientes...")
+                _sidebar_count = 0
+                
+            # Detectar archivos sin indexar
+            _docs_files = set(f for f in os.listdir(docs_dir) if f.lower().endswith(('.pdf', '.docx')))
+            if vs is not None and _sidebar_count > 0:
+                try:
+                    _all_meta = vs._collection.get(include=["metadatas"])
+                    _indexados = set(os.path.basename(m.get('source','')) for m in _all_meta["metadatas"])
+                    _sin_indexar = _docs_files - _indexados
+                    _vectores_huerfanos = _indexados - _docs_files
+                except Exception:
+                    _sin_indexar = set()
+                    _vectores_huerfanos = set()
             else:
-                st.warning(f"{_sidebar_count} vectores — {len(_sin_indexar)} pendientes")
-                if st.button(f"Indexar pendientes ({len(_sin_indexar)})", use_container_width=True, key="btn_sync"):
-                    st.session_state["_iniciar_indexado"] = sorted(list(_sin_indexar))
+                _sin_indexar = _docs_files
+                _vectores_huerfanos = set()
+
+            if not _sin_indexar and _sidebar_count > 0:
+                st.success(f"Lista base — {_sidebar_count} vectores indexados")
+            elif _sin_indexar:
+                if st.session_state.get("_iniciar_indexado"):
+                    st.info("Indexando archivos pendientes...")
+                else:
+                    st.warning(f"{_sidebar_count} vectores — {len(_sin_indexar)} pendientes")
+                    if st.button(f"Indexar pendientes ({len(_sin_indexar)})", use_container_width=True, key="btn_sync"):
+                        st.session_state["_iniciar_indexado"] = sorted(list(_sin_indexar))
+                        st.rerun()
+
+            # Procesar cola de indexación pendiente
+            if st.session_state.get("_iniciar_indexado"):
+                pendientes = st.session_state.pop("_iniciar_indexado")
+                total = len(pendientes)
+                progreso = st.progress(0, text=f"Indexando pendientes...")
+                try:
+                    for i, archivo in enumerate(pendientes):
+                        progreso.progress(i / total, text=f"Indexando: {archivo}...")
+                        ruta = os.path.join(docs_dir, archivo)
+                        vs = add_documents_incremental([ruta], vs_existente=vs)
+                    progreso.progress(1.0, text="Indexación completa.")
+                    time.sleep(1)
                     st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-        # Procesar cola de indexación pendiente
-        if st.session_state.get("_iniciar_indexado"):
-            pendientes = st.session_state.pop("_iniciar_indexado")
-            total = len(pendientes)
-            progreso = st.progress(0, text=f"Indexando pendientes...")
-            try:
-                for i, archivo in enumerate(pendientes):
-                    progreso.progress(i / total, text=f"Indexando: {archivo}...")
-                    ruta = os.path.join(docs_dir, archivo)
-                    vs = add_documents_incremental([ruta], vs_existente=vs)
-                progreso.progress(1.0, text="Indexación completa.")
-                time.sleep(1)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+            if _vectores_huerfanos:
+                st.caption(f"ℹ️ {len(_vectores_huerfanos)} huérfanos detectados — usa Reparar DB")
 
-        if _vectores_huerfanos:
-            st.caption(f"ℹ️ {len(_vectores_huerfanos)} huérfanos detectados — usa Reparar DB")
-
-        # Botón de rebuild completo
-        with st.expander("🛠️ Reparar / Reconstruir DB completa", expanded=False):
-            if st.button("Reconstruir VectorDB", use_container_width=True):
-                with st.spinner("Reconstruyendo base de datos completa..."):
-                    try:
-                        from app import get_vector_store
-                        get_vector_store.clear()
-                        from rag_pipeline import build_vector_store
-                        nuevo_vs = build_vector_store(force_rebuild=True)
-                        st.success(f"Reconstrucción exitosa: {nuevo_vs._collection.count()} vectores.")
-                        time.sleep(1)
-                        vs = nuevo_vs
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        time.sleep(2)
-                st.rerun()
+            # Botón de rebuild completo
+            with st.expander("🛠️ Reparar / Reconstruir DB completa", expanded=False):
+                if st.button("Reconstruir VectorDB", use_container_width=True, key="rebuild_db_btn"):
+                    with st.spinner("Reconstruyendo base de datos completa..."):
+                        try:
+                            from app import get_vector_store
+                            get_vector_store.clear()
+                            from rag_pipeline import build_vector_store
+                            nuevo_vs = build_vector_store(force_rebuild=True)
+                            st.success(f"Reconstrucción exitosa: {nuevo_vs._collection.count()} vectores.")
+                            time.sleep(1)
+                            vs = nuevo_vs
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                            time.sleep(2)
+                    st.rerun()
 
     # Historial reciente
     if st.session_state.historial:
-        st.markdown("### Consultas Recientes")
-        for i, h in enumerate(reversed(st.session_state.historial[-5:])):
-            st.markdown(
-                f"<div style='font-size: 0.85rem; padding: 6px 10px; background: rgba(255,255,255,0.05); "
-                f"border-radius: 6px; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; "
-                f"border: 1px solid rgba(255,255,255,0.05);' title='{html_module.escape(h)}'>"
-                f"{html_module.escape(h)}</div>",
-                unsafe_allow_html=True
-            )
+        with st.container():
+            st.markdown("### Consultas Recientes")
+            historial_html = ""
+            for i, h in enumerate(reversed(st.session_state.historial[-5:])):
+                historial_html += (
+                    f"<div style='font-size: 0.85rem; padding: 6px 10px; background: rgba(255,255,255,0.05); "
+                    f"border-radius: 6px; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; "
+                    f"border: 1px solid rgba(255,255,255,0.05);' title='{html_module.escape(h)}'>"
+                    f"{html_module.escape(h)}</div>"
+                )
+            st.markdown(historial_html, unsafe_allow_html=True)
 
     # ── Acceso administrador (login / logout) ──
     st.markdown("---")
     if is_admin:
-        st.markdown("<div style='text-align:center; font-size:0.8rem; color:#22c55e; padding:4px 0;'>🔓 Modo Administrador activo</div>", unsafe_allow_html=True)
-        if st.button("Cerrar sesión admin", use_container_width=True, key="logout_admin"):
-            st.session_state.is_admin = False
-            st.rerun()
+        with st.container():
+            st.markdown("<div style='text-align:center; font-size:0.8rem; color:#22c55e; padding:4px 0;'>🔓 Modo Administrador activo</div>", unsafe_allow_html=True)
+            if st.button("Cerrar sesión admin", use_container_width=True, key="logout_admin"):
+                st.session_state.is_admin = False
+                st.rerun()
     else:
         with st.expander("Acceso administrador", expanded=False):
             pin_input = st.text_input("PIN de acceso:", type="password", max_chars=4, key="admin_pin_input")

@@ -20,6 +20,11 @@ if os.path.exists(CSS_PATH):
         css_content = f.read()
     st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
 
+# ── Viewport meta tag for proper mobile rendering ──
+st.markdown("""
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+""", unsafe_allow_html=True)
+
 # ── 3. Inicialización de Estado ──
 if "historial" not in st.session_state:
     st.session_state.historial = []
@@ -41,7 +46,7 @@ except Exception:
     st.stop()
 
 try:
-    from rag_pipeline import build_vector_store, consultar
+    from rag_pipeline import build_vector_store, consultar, stream_consultar
     from database import registrar_consulta, registrar_evaluacion, obtener_preguntas_por_nivel
 except ImportError as e:
     st.error(f"Error al importar módulos del sistema: {e}")
@@ -75,11 +80,10 @@ if _count == 0:
     # Permitir que renderice de todos modos para que el admin pueda ingresar el PIN
     
 # Cargar Componentes de Interfaz
-from components.header import render_header
 from components.sidebar import render_sidebar
-from components.consultor import render_consultor
-from components.resultados import render_resultados
 from components.admin_panel import render_admin_panel
+from config import EJEMPLOS_CONSULTA, SALUDOS, NO_INFO_PHRASES, nombre_legible
+import html as html_module
 
 # --- DIALOG DE AUTOEVALUACIÓN ---
 @st.dialog("Autoevaluación de Neuroanatomía", width="large")
@@ -173,7 +177,13 @@ def mostrar_evaluacion(nivel):
                 st.rerun()
 
 # ── 4. Renderizar Componentes de UI ──
-render_header()
+# Título minimalista en lugar de un gran header
+if "mensajes" not in st.session_state:
+    st.session_state.mensajes = []
+
+clase_vacio = "chat-vacio" if len(st.session_state.mensajes) == 0 else "chat-con-mensajes"
+st.markdown(f"<h2 class='main-title {clase_vacio}'>Consultor IA Neuroanatomía</h2>", unsafe_allow_html=True)
+
 with st.sidebar:
     nivel, k_chunks, is_admin, lanzar_evaluacion, vs = render_sidebar(vs)
 
@@ -185,69 +195,177 @@ if lanzar_evaluacion:
 if is_admin:
     render_admin_panel()
 
-# Consultor RAG (caja de texto y ejemplos)
-pregunta, consultar_btn, col_principal = render_consultor()
+# --- 5. Interfaz tipo Chat (Gemini / ChatGPT) ---
+if "mensajes" not in st.session_state:
+    st.session_state.mensajes = []
 
-# ── 5. Procesamiento de la Consulta en Tiempo Real ──
-if consultar_btn:
-    if not pregunta.strip():
-        st.warning("Por favor, escribe una pregunta antes de consultar.")
-    else:
-        st.session_state.historial.append(pregunta)
-        waiting_area = st.empty()
+# Capturar input del usuario ANTES de renderizar
+pregunta_usuario = st.chat_input("Escribe tu consulta sobre neuroanatomía...")
+
+# Revisar si se hizo clic en un ejemplo
+if st.session_state.get("pregunta_ejemplo"):
+    pregunta_usuario = st.session_state.pregunta_ejemplo
+    st.session_state.pregunta_ejemplo = None
+
+# Contenedor principal del chat — todo dentro de un solo container
+chat_container = st.container()
+
+with chat_container:
+    # Si el chat está vacío, mostrar los ejemplos en el centro
+    if len(st.session_state.mensajes) == 0 and not pregunta_usuario:
+        st.markdown("<h3 style='text-align:center; color:#64748b; font-weight:400; font-size: 1.2rem; margin-bottom: 2rem;'>¿En qué te puedo ayudar hoy?</h3>", unsafe_allow_html=True)
         
-        # Animación de espera
-        waiting_area.markdown(
-            """
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px 0;">
-                <div class="loader-dots" style="display:flex;gap:8px;">
-                    <span style="background:#5dade2;width:12px;height:12px;border-radius:50%;display:inline-block;animation:bounce 1.4s infinite ease-in-out both;animation-delay:-0.32s;"></span>
-                    <span style="background:#5dade2;width:12px;height:12px;border-radius:50%;display:inline-block;animation:bounce 1.4s infinite ease-in-out both;animation-delay:-0.16s;"></span>
-                    <span style="background:#5dade2;width:12px;height:12px;border-radius:50%;display:inline-block;animation:bounce 1.4s infinite ease-in-out both;"></span>
-                </div>
-                <span style="color:#5dade2;font-size:16px;font-weight:600;letter-spacing:.5px;">
-                    Pensando la respuesta, por favor espera un momento...
-                </span>
-            </div>
-            <style>
-            @keyframes bounce {
-                0%, 80%, 100% { transform: scale(0); }
-                40% { transform: scale(1.0); }
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-
-        try:
-            t_start = time.time()
-            resultado = consultar(pregunta, vs, k=k_chunks, nivel=nivel)
-            latencia = time.time() - t_start
-
-            waiting_area.empty()
-            registrar_consulta(pregunta, resultado["respuesta"], nivel.lower(), latencia)
-            st.session_state["_ultimo_resultado"] = resultado
-            st.session_state["_ultima_pregunta"] = pregunta
-            st.rerun()
-
-        except Exception as e:
-            err_str = str(e)
-            waiting_area.empty()
-            if "1032" in err_str or "readonly" in err_str.lower():
-                try:
-                    vs_fresh = get_vector_store()
-                    t_start = time.time()
-                    resultado = consultar(pregunta, vs_fresh, k=k_chunks, nivel=nivel)
-                    latencia = time.time() - t_start
-                    registrar_consulta(pregunta, resultado["respuesta"], nivel.lower(), latencia)
-                    st.session_state["_ultimo_resultado"] = resultado
-                    st.session_state["_ultima_pregunta"] = pregunta
+        st.markdown("<h4 style='text-align:center; color:#8CC63F; font-size: 0.9rem; font-weight: 600; margin-bottom: 1.5rem; letter-spacing: 0.8px;'>PREGUNTAS SUGERIDAS DE EJEMPLO</h4>", unsafe_allow_html=True)
+        
+        cols = st.columns(min(3, len(EJEMPLOS_CONSULTA)))
+        for i, (ej, tooltip) in enumerate(EJEMPLOS_CONSULTA):
+            with cols[i % 3]:
+                if st.button(ej, help=tooltip, use_container_width=True, key=f"ej_{i}"):
+                    st.session_state.pregunta_ejemplo = ej
                     st.rerun()
-                except Exception as e2:
-                    st.error(f"Error de base de datos: {str(e2)[:200]}")
-            else:
-                st.error(f"Error: {err_str[:200]}")
 
-# Mostrar resultado si está guardado en session_state
-if st.session_state.get("_ultimo_resultado"):
-    render_resultados(st.session_state["_ultimo_resultado"], col_principal)
+    # Mostrar el historial de mensajes del chat
+    for msg in st.session_state.mensajes:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+            # Mostrar badge de sin alucinación si aplica
+            if msg.get("es_respuesta_sin_info"):
+                st.markdown(
+                    '<div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); '
+                    'color: #10b981; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-top: 8px; '
+                    'display: inline-block; font-weight: 500;">'
+                    'Respuesta validada: El sistema reconoció el límite de su conocimiento'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+            # Mostrar evidencia si existe
+            if msg.get("evidencia_html"):
+                with st.expander("Ver Evidencia Documental (Citas y Referencias)"):
+                    st.markdown(msg["evidencia_html"], unsafe_allow_html=True)
+                    
+            # Mostrar botón de descarga si existe reporte
+            if msg.get("reporte"):
+                st.download_button(
+                    label="📥 Descargar Reporte PDF/TXT",
+                    data=msg["reporte"],
+                    file_name="consulta_neuroanatomia.txt",
+                    mime="text/plain",
+                    key=f"dl_{msg['id']}"
+                )
+
+    # Procesar nueva pregunta
+    if pregunta_usuario:
+        if not pregunta_usuario.strip():
+            st.warning("Por favor, escribe una pregunta válida.")
+        else:
+            st.session_state.historial.append(pregunta_usuario)
+            
+            # Guardar y mostrar el mensaje del usuario
+            st.session_state.mensajes.append({"role": "user", "content": pregunta_usuario, "id": str(time.time())})
+            with st.chat_message("user"):
+                st.markdown(pregunta_usuario)
+                
+            # Preparar contenedor del asistente con streaming
+            with st.chat_message("assistant"):
+                try:
+                    # Mostrar puntos suspensivos animados mientras piensa
+                    thinking_placeholder = st.empty()
+                    thinking_placeholder.markdown(
+                        """
+                        <div style="display:flex; align-items:center; gap:8px; padding:4px 0;">
+                            <div style="display:flex; gap:4px;">
+                                <span style="background:#8CC63F;width:8px;height:8px;border-radius:50%;display:inline-block;animation:pulse 1.4s infinite ease-in-out both;animation-delay:-0.32s;"></span>
+                                <span style="background:#8CC63F;width:8px;height:8px;border-radius:50%;display:inline-block;animation:pulse 1.4s infinite ease-in-out both;animation-delay:-0.16s;"></span>
+                                <span style="background:#8CC63F;width:8px;height:8px;border-radius:50%;display:inline-block;animation:pulse 1.4s infinite ease-in-out both;"></span>
+                            </div>
+                            <span style="color:#64748b; font-size:0.85rem; font-style:italic;">Consultando fuentes...</span>
+                        </div>
+                        <style>
+                        @keyframes pulse {
+                            0%, 80%, 100% { transform: scale(0); opacity: 0; }
+                            40% { transform: scale(1.0); opacity: 1; }
+                        }
+                        </style>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    
+                    t_start = time.time()
+                    token_gen, docs, ctx_tokens = stream_consultar(pregunta_usuario, vs, k=k_chunks, nivel=nivel)
+                    
+                    # Envolver generador para quitar los puntos al primer token
+                    def _stream_with_clear():
+                        first = True
+                        for token in token_gen:
+                            if first:
+                                thinking_placeholder.empty()
+                                first = False
+                            yield token
+                    
+                    # Streaming token por token (como ChatGPT/Gemini)
+                    respuesta_texto = st.write_stream(_stream_with_clear())
+                    latencia = time.time() - t_start
+                    
+                    es_respuesta_sin_info = any(p in respuesta_texto.lower() for p in NO_INFO_PHRASES)
+                    es_saludo = any(s in pregunta_usuario.strip().lower() for s in SALUDOS)
+                    
+                    registrar_consulta(pregunta_usuario, respuesta_texto, nivel.lower(), latencia)
+                    
+                    if es_respuesta_sin_info:
+                        st.markdown(
+                            '<div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); '
+                            'color: #10b981; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-top: 8px; '
+                            'display: inline-block; font-weight: 500;">'
+                            'Respuesta validada: El sistema reconoció el límite de su conocimiento'
+                            '</div>',
+                            unsafe_allow_html=True
+                        )
+
+                    evidencia_html = ""
+                    reporte_txt = ""
+                    
+                    mostrar_evidencia = len(docs) > 0 and not es_saludo
+                    if mostrar_evidencia:
+                        evidencias_lista = []
+                        for i, doc in enumerate(docs, 1):
+                            file_name = os.path.basename(doc.metadata.get("source", "desconocido"))
+                            nombre_revista = nombre_legible(file_name)
+                            pagina = doc.metadata.get("page", "?")
+                            
+                            evidencias_lista.append(f"**Fragmento {i} — {nombre_revista} (Pág. {pagina})**\n<div style='background: #f8fafc; border: 1px solid rgba(74, 35, 90, 0.1); padding: 12px; border-radius: 8px; font-size: 0.9rem; color: #334155; margin-bottom: 12px; line-height: 1.5; white-space: pre-wrap;'>{html_module.escape(doc.page_content)}</div>")
+                            
+                        evidencia_html = "\n\n".join(evidencias_lista)
+                        
+                        with st.expander("Ver Evidencia Documental (Citas y Referencias)"):
+                            st.markdown(evidencia_html, unsafe_allow_html=True)
+                            
+                        # Generar archivo descargable
+                        fuentes_txt = "\n".join([f"  [{i+1}] {nombre_legible(os.path.basename(d.metadata.get('source','?')))} — Pág. {d.metadata.get('page','?')}" for i, d in enumerate(docs)])
+                        
+                        reporte_txt = f"=========================================\nCONSULTA NEUROANATÓMICA — REPORTE RAG\n=========================================\n\nPREGUNTA:\n{pregunta_usuario}\n\nRESPUESTA:\n{respuesta_texto}\n\nFUENTES BASADAS EN LITERATURA:\n{fuentes_txt}\n\n========================================="
+                        
+                        st.download_button(
+                            label="📥 Descargar Reporte PDF/TXT",
+                            data=reporte_txt,
+                            file_name="consulta_neuroanatomia.txt",
+                            mime="text/plain",
+                            key=f"dl_new_{time.time()}"
+                        )
+                        
+                    # Guardar en el historial
+                    st.session_state.mensajes.append({
+                        "role": "assistant",
+                        "content": respuesta_texto,
+                        "es_respuesta_sin_info": es_respuesta_sin_info,
+                        "evidencia_html": evidencia_html,
+                        "reporte": reporte_txt,
+                        "id": str(time.time())
+                    })
+                    # Forzar re-render limpio para eliminar fantasmas
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al generar respuesta: {str(e)}")
+
+
