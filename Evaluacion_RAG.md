@@ -118,4 +118,4 @@ Los **2 casos de anti-alucinación** (preguntas 7 y 8) demostraron que el sistem
 
 ---
 
-*Evaluación realizada por: Viviana García & Braian Ramírez — Universidad Konrad Lorenz · 2026*
+*Evaluación realizada en la Universidad Konrad Lorenz · Programa de Psicología · Laboratorio de Neurociencias · 2026*

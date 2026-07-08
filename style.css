@@ -1,0 +1,210 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+    --primary: #4a235a;
+    --primary-light: #6c3483;
+    --accent: #5dade2;
+    --accent-dark: #2e86c1;
+    --bg-base: #0c110e;
+    --bg-sidebar: #121915;
+    --bg-card: #16201b;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --border-light: rgba(16, 185, 129, 0.15);
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+    color: var(--text-main);
+}
+
+h1, h2, h3, .hero-header h1 {
+    font-family: 'Outfit', sans-serif !important;
+}
+
+.stApp {
+    background-color: var(--bg-base);
+    color: var(--text-main);
+}
+
+/* Sidebar styling */
+section[data-testid="stSidebar"] {
+    background-color: var(--bg-sidebar) !important;
+    border-right: 1px solid var(--border-light);
+}
+
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+    color: #e2e8f0;
+}
+
+.sidebar-content {
+    padding: 1rem;
+}
+
+/* Hero Header - Clean Dark Emerald Style */
+.hero-header {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-top: 4px solid #8CC63F;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.hero-header h1 {
+    color: #ffffff;
+    font-size: clamp(1.8rem, 3.5vw, 2.5rem);
+    font-weight: 700;
+    margin: 0.5rem 0 0 0;
+    letter-spacing: -0.5px;
+}
+
+.hero-header p {
+    color: #cbd5e1;
+    font-size: 1.05rem;
+    margin: 8px 0 0 0;
+    font-weight: 400;
+}
+
+.hero-header .kl-subtitle {
+    color: #8CC63F;
+    font-size: 0.82rem;
+    margin-top: 6px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+/* Response Card */
+.response-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-left: 4px solid #8CC63F;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-top: 1rem;
+    color: #ffffff;
+    line-height: 1.8;
+    font-size: 1.1rem;
+    font-weight: 400;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+/* Metrics row */
+.metric-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+.metric-chip {
+    background: rgba(93, 173, 226, 0.08);
+    border: 1px solid rgba(93, 173, 226, 0.25);
+    border-radius: 20px;
+    padding: 6px 16px;
+    color: var(--accent);
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+}
+
+.metric-chip:hover {
+    background: rgba(93, 173, 226, 0.15);
+    transform: translateY(-1px);
+}
+
+/* Input area styling */
+.stTextArea textarea {
+    background: var(--bg-sidebar) !important;
+    border: 1px solid var(--border-light) !important;
+    border-radius: 10px !important;
+    color: var(--text-main) !important;
+    font-size: 0.95rem !important;
+    padding: 1rem !important;
+    transition: all 0.2s ease !important;
+}
+
+.stTextArea textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(93, 173, 226, 0.15) !important;
+}
+
+/* Button styling */
+.stButton > button {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.65rem 1.25rem !important;
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+    width: 100% !important;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25) !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 14px rgba(5, 150, 105, 0.4) !important;
+    background: var(--primary-light) !important;
+}
+
+/* Expander styling */
+.streamlit-expanderHeader {
+    background: var(--bg-card) !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--border-light) !important;
+    color: var(--text-main) !important;
+}
+
+hr {
+    border-color: var(--border-light) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* University badge section */
+.kl-badge {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 20px;
+}
+
+/* Hide Streamlit elements */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display: none !important;}
+
+/* Sidebar custom autoevaluacion button */
+.stButton > button[key*="realizar_evaluacion"] {
+    background: linear-gradient(135deg, var(--accent-dark) 0%, var(--accent) 100%) !important;
+    color: #0c110e !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 8px rgba(93, 173, 226, 0.2) !important;
+}
+.stButton > button[key*="realizar_evaluacion"]:hover {
+    box-shadow: 0 4px 14px rgba(93, 173, 226, 0.4) !important;
+    background: var(--accent) !important;
+}
+
+/* File list accent */
+.doc-item {
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+    color: #e2e8f0;
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

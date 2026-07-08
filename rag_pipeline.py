@@ -1,7 +1,9 @@
 """
 rag_pipeline.py — Pipeline RAG para el Consultor Especialista en Neuroanatomía
-Carga PDFs científicos, los vectoriza con Google Gemini Embeddings y ChromaDB,
-y responde consultas usando Gemini como LLM, anclado exclusivamente al contenido.
+Versión 2.0: 100% LOCAL con Ollama (sin API keys, sin cuotas, sin internet)
+- Embeddings: nomic-embed-text (via Ollama)
+- LLM: llama3.2 (via Ollama)
+- VectorDB: ChromaDB local (SQLite)
 """
 
 import os
@@ -11,65 +13,96 @@ from dotenv import load_dotenv
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_chroma import Chroma
-from google import genai
-from google.genai import types as genai_types
+from langchain_core.documents import Document
 
 # ─────────────────────────────────────────────
 # 1. CONFIGURACIÓN
 # ─────────────────────────────────────────────
 load_dotenv()
 
-API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("No se encontró GEMINI_API_KEY en el archivo .env")
-
-os.environ["GOOGLE_API_KEY"] = API_KEY
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.path.join(BASE_DIR, "Docs")
-# PDF_FILES es dinámico — se lee en cada llamada para capturar archivos nuevos
-def _get_pdf_files():
+
+# _get_docs_files es dinámico — se lee en cada llamada para capturar archivos nuevos (.pdf y .docx)
+def _get_docs_files():
     if not os.path.exists(DOCS_DIR):
         return []
     return sorted([
         os.path.join(DOCS_DIR, f)
         for f in os.listdir(DOCS_DIR)
-        if f.lower().endswith(".pdf")
+        if f.lower().endswith((".pdf", ".docx"))
     ])
+
+def _load_any_document(file_path: str) -> list:
+    """Carga un PDF usando PyPDFLoader o un DOCX usando un parser local de XML."""
+    if file_path.lower().endswith(".pdf"):
+        loader = PyPDFLoader(file_path)
+        return loader.load()
+    elif file_path.lower().endswith(".docx"):
+        try:
+            import zipfile
+            import xml.etree.ElementTree as ET
+            with zipfile.ZipFile(file_path) as docx:
+                tree = ET.parse(docx.open('word/document.xml'))
+                root = tree.getroot()
+                ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                text = ' '.join(n.text for n in root.findall('.//w:t', ns) if n.text)
+            
+            # Retorna como una sola página de Documento (será fragmentada en el split)
+            return [Document(page_content=text, metadata={"source": file_path, "page": 1})]
+        except Exception as e:
+            print(f"  [!] Error leyendo Word {os.path.basename(file_path)}: {e}")
+            return []
+    return []
 
 PERSIST_DIR = os.path.join(BASE_DIR, "chroma_neuro_db")
 COLLECTION_NAME = "neuroanatomia_cientifica"
 
 # ─────────────────────────────────────────────
-# 2. MODELOS
+# 2. MODELOS — 100% LOCAL via Ollama
 # ─────────────────────────────────────────────
-# Modelo de embeddings: gemini-embedding-001 (cambiado porque gemini-embedding-2-preview agotó su cuota de 1000 requests)
-embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    google_api_key=API_KEY,
-)
+# Modelo de embeddings local: nomic-embed-text (274 MB, sin cuotas)
+OLLAMA_EMBED_MODEL = "nomic-embed-text"
+OLLAMA_LLM_MODEL   = "qwen2.5:1.5b"   # 2 GB — ya instalado. Cambiar a llama3.1:8b o qwen2.5:7b si hay más RAM
 
-# Cliente Gemini directo (sin forzar api_version)
-_genai_client = genai.Client(api_key=API_KEY)
+embeddings_model = OllamaEmbeddings(
+    model=OLLAMA_EMBED_MODEL,
+)
 
 # ─────────────────────────────────────────────
 # 3. SYSTEM PROMPT — Identidad del consultor
 # ─────────────────────────────────────────────
-SYSTEM_INSTRUCTION = """Eres un consultor especialista en neuroanatomía con formación en investigación científica.
-Tu misión es responder preguntas EXCLUSIVAMENTE basándote en la información del <contexto>.
+SYSTEM_INSTRUCTION_BASICO = """Eres un consultor y divulgador de neuroanatomía para público general sin formación en medicina.
+Tu misión es explicar de manera sencilla, didáctica y clara, utilizando analogías y metáforas de la vida cotidiana para facilitar el aprendizaje. Evita tecnicismos excesivos y traduce conceptos médicos difíciles a un lenguaje accesible.
+
+Tu respuesta debe basarse EXCLUSIVAMENTE en la información del <contexto>.
+
+REGLAS ESTRICTAS (de mayor a menor prioridad):
+1. Si la <pregunta> es un saludo, una expresión social (hola, gracias, qué tal, etc.) o NO es una pregunta científica, responde Únicamente con:
+   "Por favor, formula una pregunta específica sobre neuroanatomía para poder ayudarte. Ejemplo: ¿Cuáles son las partes del cerebro?"
+   No agregues nada más. No resumas los documentos.
+2. Si el contexto contiene información relacionada, descríbela de forma didáctica.
+3. Si el tema de la pregunta NO aparece de ninguna forma en el contexto, responde:
+   "Esta información no se encuentra en los documentos científicos disponibles."
+4. Cita siempre la fuente (nombre del archivo y página) de forma simplificada al final.
+5. Nunca inventes información o uses conocimiento externo."""
+
+SYSTEM_INSTRUCTION_AVANZADO = """Eres un consultor especialista y docente en neuroanatomía clínica para nivel universitario y profesional.
+Tu misión es responder con alta rigurosidad académica, precisión terminológica y profundidad conceptual. Detalla los núcleos específicos, tractos neuronales, relaciones espaciales y correlaciones clínicas correspondientes.
+
+Tu respuesta debe basarse EXCLUSIVAMENTE en la información del <contexto>.
 
 REGLAS ESTRICTAS (de mayor a menor prioridad):
 1. Si la <pregunta> es un saludo, una expresión social (hola, gracias, qué tal, etc.) o NO es una pregunta científica, responde Únicamente con:
    "Por favor, formula una pregunta específica sobre el contenido de los artículos científicos. Ejemplo: ¿Qué estructuras neuroanatómicas se describen?"
-   No agregues nada más. No resumas los documentos. No menciones su contenido.
-2. Si el contexto contiene información RELACIONADA con la pregunta (aunque no responda exactamente cada detalle), sintetiza y presenta la información disponible con sus fuentes. No exijas datos exactos si hay información relevante sobre el tema.
-3. Solo si el tema de la pregunta NO aparece de ninguna forma en el contexto, responde:
+   No agregues nada más. No resumas los documentos.
+2. Si el contexto contiene información relacionada con la pregunta, sintetiza y presenta la información disponible detalladamente.
+3. Si el tema de la pregunta NO aparece de ninguna forma en el contexto, responde:
    "Esta información no se encuentra en los documentos científicos disponibles."
-4. Siempre cita la fuente (nombre del PDF y página) al final de cada respuesta científica.
-5. Usa terminología científica precisa. Nunca uses conocimiento externo a los documentos.
-6. Si se necesita combinar información de varios fragmentos, intégralos de forma coherente."""
+4. Cita siempre la fuente (nombre del archivo y página) al final de cada respuesta científica.
+5. Usa terminología científica precisa. Nunca uses conocimiento externo."""
 
 PROMPT_TEMPLATE = """
 <contexto>
@@ -80,13 +113,7 @@ PROMPT_TEMPLATE = """
 {question}
 </pregunta>
 
-Instrucciones para responder:
-- Si el contexto contiene información que RESPONDE DIRECTAMENTE la pregunta, preséntala de forma organizada.
-- Si el contexto contiene información RELACIONADA con el tema (aunque no sea la respuesta exacta), sintetiza esa información disponible como la mejor evidencia encontrada en los documentos.
-- SOLO si el tema no aparece de ninguna forma en el contexto, responde que no se encuentra la información.
-- Siempre indica en qué fuente(s) y página(s) encontraste la información.
-- No uses conocimiento externo a los documentos.
-"""
+Responde como consultor basándote EXCLUSIVAMENTE en el contexto anterior. Al final, indica en qué fuente(s) encontraste la información."""
 
 
 # ─────────────────────────────────────────────
@@ -112,21 +139,20 @@ def _restaurar_backup(temp_dir: str, backup_dir: str, persist_dir: str) -> None:
 def build_vector_store(force_rebuild: bool = False) -> Chroma:
     """
     PASO 1-4 del pipeline RAG:
-    Carga PDFs → Chunking → Vectorización (Embeddings) → ChromaDB
+    Carga PDFs → Chunking → Vectorización (Embeddings locales) → ChromaDB
 
     Backup permanente en ~/.neuro_db_permanent/ — se restaura automáticamente
-    si la DB local desaparece (git clean, rm -rf accidental, etc.)
+    si la DB local desaparece.
     """
     PERMANENT_BACKUP = os.path.join(os.path.expanduser("~"), ".neuro_db_permanent")
 
     if not force_rebuild:
         # Modo carga: SOLO cargar si existe, NUNCA reconstruir automáticamente
         if not os.path.exists(PERSIST_DIR):
-            # ── Intentar restaurar desde backup permanente antes de fallar ──
             if os.path.exists(PERMANENT_BACKUP):
-                print(f"[RESTORE] DB no encontrada localmente. Restaurando desde backup permanente...")
+                print("[RESTORE] DB no encontrada localmente. Restaurando desde backup permanente...")
                 shutil.copytree(PERMANENT_BACKUP, PERSIST_DIR)
-                print(f"[RESTORE] ✔ DB restaurada desde ~/.neuro_db_permanent/")
+                print("[RESTORE] ✔ DB restaurada desde ~/.neuro_db_permanent/")
             else:
                 raise FileNotFoundError(
                     "Base vectorial no encontrada. "
@@ -154,37 +180,35 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
         shutil.copytree(PERSIST_DIR, BACKUP_DIR)
         print(f"[BACKUP] DB respaldada en {os.path.basename(BACKUP_DIR)}/")
 
-    # PASO 1 — Carga de documentos PDF (lectura dinámica de Docs/)
-    pdf_files = _get_pdf_files()
-    print(f"\n[PASO 1] Cargando PDFs de neuroanatomía... ({len(pdf_files)} archivos en Docs/)")
+    # PASO 1 — Carga de documentos (PDF y DOCX)
+    docs_files = _get_docs_files()
+    print(f"\n[PASO 1] Cargando documentos de neuroanatomía... ({len(docs_files)} archivos en Docs/)")
     documents = []
-    for pdf_path in pdf_files:
-        if not os.path.exists(pdf_path):
-            print(f"  [!] Archivo no encontrado: {os.path.basename(pdf_path)}")
+    for file_path in docs_files:
+        if not os.path.exists(file_path):
+            print(f"  [!] Archivo no encontrado: {os.path.basename(file_path)}")
             continue
-        loader = PyPDFLoader(pdf_path)
-        pages = loader.load()
+        pages = _load_any_document(file_path)
         documents.extend(pages)
-        print(f"  ✔ {os.path.basename(pdf_path)}: {len(pages)} páginas")
-    print(f"  Total páginas cargadas: {len(documents)}")
+        print(f"  ✔ {os.path.basename(file_path)}: {len(pages)} páginas/secciones cargadas")
+    print(f"  Total de páginas/secciones cargadas: {len(documents)}")
 
-    # PASO 2 — Chunking (RecursiveCharacterTextSplitter)
-    print("\n[PASO 2] Dividiendo en fragmentos (chunk_size=600, overlap=80)...")
+    # PASO 2 — Chunking
+    print("\n[PASO 2] Dividiendo en fragmentos (chunk_size=800, overlap=100)...")
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=80,
+        chunk_size=800,
+        chunk_overlap=100,
         separators=["\n\n", "\n", ".", " "],
     )
     chunks = splitter.split_documents(documents)
     print(f"  Fragmentos generados: {len(chunks)}")
 
-    # PASO 3 & 4 — Embeddings + ChromaDB en carpeta TEMPORAL (la original no se toca hasta el éxito)
-    print("\n[PASO 3 & 4] Vectorizando hacia carpeta temporal (la DB original queda intacta hasta confirmar éxito)...")
-    print("  (lotes de 100 fragmentos, pausa 5s entre lotes, reintento automático en 429)")
+    # PASO 3 & 4 — Embeddings locales + ChromaDB
+    # OllamaEmbeddings no tiene límite de cuota — 100% local
+    print(f"\n[PASO 3 & 4] Vectorizando con Ollama ({OLLAMA_EMBED_MODEL}) — sin cuotas, 100% local...")
+    print("  (lotes de 50 fragmentos)")
 
-    BATCH_SIZE = 100
-    PAUSE_SECONDS = 5
-    MAX_RETRIES = 3
+    BATCH_SIZE = 50
     vector_store = None
 
     for i in range(0, len(chunks), BATCH_SIZE):
@@ -193,53 +217,32 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
         total_lotes = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
         print(f"  Lote {numero_lote}/{total_lotes}: fragmentos {i+1}–{min(i+BATCH_SIZE, len(chunks))}...")
 
-        # Retry con backoff exponencial en caso de 429
-        for intento in range(1, MAX_RETRIES + 1):
-            try:
-                if vector_store is None:
-                    vector_store = Chroma.from_documents(
-                        documents=lote,
-                        embedding=embeddings_model,
-                        persist_directory=TEMP_DIR,       # ← carpeta temporal
-                        collection_name=COLLECTION_NAME,
-                        collection_metadata={"hnsw:space": "cosine"},
-                    )
-                else:
-                    vector_store.add_documents(lote)
-                break  # Éxito — salir del loop de reintentos
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or \
-                   "503" in err_str or "UNAVAILABLE" in err_str:
-                    espera = 30 * intento  # 30s, 60s, 90s solo en caso de error real
-                    print(f"  ⚠️ Error temporal ({'429' if '429' in err_str else '503'}). Esperando {espera}s (intento {intento}/{MAX_RETRIES})...")
-                    time.sleep(espera)
-                    if intento == MAX_RETRIES:
-                        _restaurar_backup(TEMP_DIR, BACKUP_DIR, PERSIST_DIR)
-                        raise RuntimeError(
-                            f"API no disponible después de {MAX_RETRIES} reintentos. "
-                            "La base de datos anterior fue restaurada automáticamente."
-                        ) from e
-                else:
-                    _restaurar_backup(TEMP_DIR, BACKUP_DIR, PERSIST_DIR)
-                    raise
+        try:
+            if vector_store is None:
+                vector_store = Chroma.from_documents(
+                    documents=lote,
+                    embedding=embeddings_model,
+                    persist_directory=TEMP_DIR,
+                    collection_name=COLLECTION_NAME,
+                    collection_metadata={"hnsw:space": "cosine"},
+                )
+            else:
+                vector_store.add_documents(lote)
+        except Exception as e:
+            _restaurar_backup(TEMP_DIR, BACKUP_DIR, PERSIST_DIR)
+            raise RuntimeError(f"Error vectorizando: {e}") from e
 
-        # No forzamos pausas, si hay 429 el except se encarga
-
-    # ── Swap seguro: cerrar conexión y hacer checkpoint SQLite antes de copiar ──
+    # ── Swap seguro ──
     total = vector_store._collection.count()
-    print(f"  ✔ {total} vectores listos. Cerrando conexión temporal y guardando DB...")
+    print(f"  ✔ {total} vectores listos. Cerrando conexión temporal...")
 
-    # 1. Cerrar la conexión ChromaDB al directorio temporal
     try:
         vector_store._client._system.stop()
     except Exception:
         pass
     del vector_store
 
-    # 2. Checkpoint del WAL de SQLite (Write-Ahead Log) para que todos los
-    #    datos queden en el archivo .sqlite3 principal antes de copiar.
-    #    Sin esto, la DB copiada puede fallar con "default_tenant not found".
+    # Checkpoint WAL de SQLite
     import sqlite3 as _sqlite3
     sqlite_file = os.path.join(TEMP_DIR, "chroma.sqlite3")
     if os.path.exists(sqlite_file):
@@ -251,21 +254,19 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
         except Exception as _e:
             print(f"  [WARN] No se pudo hacer checkpoint: {_e}")
 
-    # 3. Swap: reemplazar la DB real con la temporal
+    # Swap: temporal → real
     if os.path.exists(PERSIST_DIR):
         shutil.rmtree(PERSIST_DIR)
     shutil.copytree(TEMP_DIR, PERSIST_DIR)
     shutil.rmtree(TEMP_DIR)
 
-    # Eliminar backup ahora que la nueva DB está confirmada
     if os.path.exists(BACKUP_DIR):
         shutil.rmtree(BACKUP_DIR)
         print(f"  ✔ Backup eliminado — DB nueva confirmada ({total} vectores)")
 
     print(f"  ✔ DB actualizada en {os.path.basename(PERSIST_DIR)}/ — {total} vectores indexados")
 
-    # ── Guardar backup PERMANENTE en home (~/.neuro_db_permanent/) ──
-    # Este backup sobrevive a git clean, rm -rf en el proyecto, etc.
+    # Backup permanente en home
     try:
         PERMANENT_BACKUP = os.path.join(os.path.expanduser("~"), ".neuro_db_permanent")
         if os.path.exists(PERMANENT_BACKUP):
@@ -275,7 +276,6 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
     except Exception as _e:
         print(f"  [WARN] No se pudo guardar backup permanente: {_e}")
 
-    # Devolver instancia apuntando a la carpeta real
     return Chroma(
         persist_directory=PERSIST_DIR,
         embedding_function=embeddings_model,
@@ -289,8 +289,6 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
 def remove_documents_from_store(pdf_filename: str, vs_existente=None):
     """
     Elimina de ChromaDB todos los vectores que provienen del PDF indicado.
-    Usa el campo metadata['source'] para identificarlos.
-    Devuelve (vs, n_eliminados).
     """
     vs = vs_existente
     if vs is None:
@@ -302,7 +300,6 @@ def remove_documents_from_store(pdf_filename: str, vs_existente=None):
             collection_name=COLLECTION_NAME,
         )
 
-    # Buscar todos los IDs cuyo metadata['source'] contenga el nombre del PDF
     todos = vs._collection.get(include=["metadatas"])
     ids_a_borrar = [
         doc_id
@@ -318,8 +315,6 @@ def remove_documents_from_store(pdf_filename: str, vs_existente=None):
 
     total = vs._collection.count()
     print(f"  ✔ DB ahora tiene {total} vectores totales")
-    # El backup permanente NO se actualiza aqui (evita error 1032 SQLITE_READONLY_DBMOVED)
-    # Solo se actualiza en el rebuild completo donde se cierra la conexion antes de copiar
     return vs, len(ids_a_borrar)
 
 
@@ -329,27 +324,22 @@ def remove_documents_from_store(pdf_filename: str, vs_existente=None):
 def add_documents_incremental(new_pdf_paths: list, vs_existente=None):
     """
     Agrega solo los archivos nuevos a la base vectorial existente.
-    Si se pasa vs_existente (objeto Chroma ya abierto), lo reutiliza
-    para evitar el error de doble conexion SQLite (codigo 1032).
     """
-    BATCH_SIZE = 100
-    MAX_RETRIES = 3
+    BATCH_SIZE = 50
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600, chunk_overlap=80,
+        chunk_size=800, chunk_overlap=100,
         separators=["\n\n", "\n", ".", " "],
     )
 
-    # Cargar y chunkear solo los nuevos PDFs
     documents = []
-    for pdf_path in new_pdf_paths:
-        if not os.path.exists(pdf_path):
-            print(f"  [!] No encontrado: {os.path.basename(pdf_path)}")
+    for doc_path in new_pdf_paths:
+        if not os.path.exists(doc_path):
+            print(f"  [!] No encontrado: {os.path.basename(doc_path)}")
             continue
-        loader = PyPDFLoader(pdf_path)
-        pages = loader.load()
+        pages = _load_any_document(doc_path)
         documents.extend(pages)
-        print(f"  ✔ {os.path.basename(pdf_path)}: {len(pages)} páginas")
+        print(f"  ✔ {os.path.basename(doc_path)}: {len(pages)} páginas/secciones cargadas")
 
     if not documents:
         raise ValueError("No se pudo cargar ningún documento de los archivos dados.")
@@ -357,7 +347,6 @@ def add_documents_incremental(new_pdf_paths: list, vs_existente=None):
     chunks = splitter.split_documents(documents)
     print(f"  Fragmentos nuevos: {len(chunks)}")
 
-    # Reutilizar conexion existente si se pasa (evita error 1032 de doble conexion)
     vs = vs_existente
     if vs is None and os.path.exists(PERSIST_DIR):
         vs = Chroma(
@@ -373,49 +362,34 @@ def add_documents_incremental(new_pdf_paths: list, vs_existente=None):
         total_lotes = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
         print(f"  Lote {numero_lote}/{total_lotes}: fragmentos {i+1}–{min(i+BATCH_SIZE, len(chunks))}...")
 
-        for intento in range(1, MAX_RETRIES + 1):
-            try:
-                if vs is None:
-                    vs = Chroma.from_documents(
-                        documents=lote,
-                        embedding=embeddings_model,
-                        persist_directory=PERSIST_DIR,
-                        collection_name=COLLECTION_NAME,
-                        collection_metadata={"hnsw:space": "cosine"},
-                    )
-                else:
-                    vs.add_documents(lote)
-                break
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    espera = 15 * intento  # 15s, 30s max — falla rápido en UI
-                    print(f"  ⚠️ 429 — esperando {espera}s...")
-                    time.sleep(espera)
-                    if intento == MAX_RETRIES:
-                        raise RuntimeError(
-                            "Cuota de embeddings agotada (límite diario gratuito). "
-                            "Se resetea automáticamente mañana. "
-                            "O genera una nueva API Key en https://aistudio.google.com/apikey"
-                        ) from e
-                else:
-                    raise
-
-        # Sin pausas forzadas entre lotes para maximizar velocidad
+        try:
+            if vs is None:
+                vs = Chroma.from_documents(
+                    documents=lote,
+                    embedding=embeddings_model,
+                    persist_directory=PERSIST_DIR,
+                    collection_name=COLLECTION_NAME,
+                    collection_metadata={"hnsw:space": "cosine"},
+                )
+            else:
+                vs.add_documents(lote)
+        except Exception as e:
+            raise RuntimeError(f"Error vectorizando: {e}") from e
 
     total = vs._collection.count()
     print(f"  ✔ DB ahora tiene {total} vectores totales")
-    # El backup permanente NO se actualiza aqui (evita error 1032 SQLITE_READONLY_DBMOVED)
-    # Solo se actualiza en el rebuild completo donde se cierra la conexion antes de copiar
     return vs
 
+
 # ─────────────────────────────────────────────
-def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
+# 5. CONSULTA RAG — 100% LOCAL con Ollama LLM
+# ─────────────────────────────────────────────
+def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "avanzado") -> dict:
     """
     PASOS 5-7 del pipeline RAG:
-    Recuperación vectorial → Prompt aumentado → Generación con LLM
+    Recuperación vectorial → Prompt aumentado → Generación local con Ollama
     """
-    # PASO 5 — Recuperación (k fragmentos más similares)
+    # PASO 5 — Recuperación
     retriever = vector_store.as_retriever(
         search_type="similarity",
         search_kwargs={"k": k},
@@ -432,46 +406,30 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
         )
     context = "\n\n---\n\n".join(context_parts)
 
+    system_instruction = SYSTEM_INSTRUCTION_AVANZADO if nivel.lower() == "avanzado" else SYSTEM_INSTRUCTION_BASICO
+
     prompt_completo = (
-        SYSTEM_INSTRUCTION
+        system_instruction
         + "\n\n"
         + PROMPT_TEMPLATE.format(context=context, question=pregunta)
     )
 
-    # PASO 7 — Generación LLM via REST (intenta modelos en orden de disponibilidad)
-    import requests as _req
-    _llm_models = [
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
+    # PASO 7 — Generación LOCAL con Ollama (sin internet, sin cuotas)
+    llm = ChatOllama(
+        model=OLLAMA_LLM_MODEL,
+        temperature=0.1,
+        num_predict=600,   # Límite explícito para respuestas ágiles en CPU Intel
+        num_ctx=2048,      # Ventana de contexto reducida para mayor velocidad
+    )
+
+    # pyrefly: ignore [missing-import]
+    from langchain_core.messages import HumanMessage, SystemMessage
+    messages = [
+        SystemMessage(content=system_instruction),
+        HumanMessage(content=PROMPT_TEMPLATE.format(context=context, question=pregunta)),
     ]
-    _body = {
-        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": [{"parts": [{"text": PROMPT_TEMPLATE.format(context=context, question=pregunta)}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
-    }
-    texto = ""
-    for _model in _llm_models:
-        _url = f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent?key={API_KEY}"
-        _resp = _req.post(_url, json=_body, timeout=30)
-        if _resp.status_code == 200:
-            texto = _resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            break
-        elif _resp.status_code in (429, 503):
-            continue  # cuota agotada o modelo sobrecargado → probar siguiente
-        else:
-            err = _resp.json().get("error", {}).get("message", "")
-            # También hacer fallback si el modelo no está disponible o está sobrecargado
-            if ("not found" in err.lower() or "404" in str(_resp.status_code)
-                    or "overload" in err.lower() or "unavailable" in err.lower()):
-                continue  # modelo no disponible → probar siguiente
-            raise RuntimeError(f"Error LLM ({_resp.status_code}): {err[:120]}")
-    if not texto:
-        raise RuntimeError(
-            "Cuota LLM agotada en todos los modelos disponibles. "
-            "Por favor agrega una nueva GEMINI_API_KEY en el archivo .env y reinicia la app."
-        )
+    response = llm.invoke(messages)
+    texto = response.content
 
     return {
         "pregunta": pregunta,
@@ -481,12 +439,56 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5) -> dict:
     }
 
 
+def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avanzado"):
+    """
+    Igual que consultar() pero devuelve un GENERADOR de tokens.
+    Se usa con st.write_stream() en Streamlit para streaming en tiempo real.
+    Retorna: (generator, docs, context_tokens)
+    """
+    retriever = vector_store.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": k},
+    )
+    docs = retriever.invoke(pregunta)
+
+    context_parts = []
+    for i, doc in enumerate(docs, 1):
+        fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
+        pagina = doc.metadata.get("page", "?")
+        context_parts.append(
+            f"[Fragmento {i} — {fuente}, Pág. {pagina}]\n{doc.page_content}"
+        )
+    context = "\n\n---\n\n".join(context_parts)
+
+    system_instruction = SYSTEM_INSTRUCTION_AVANZADO if nivel.lower() == "avanzado" else SYSTEM_INSTRUCTION_BASICO
+
+    # pyrefly: ignore [missing-import]
+    from langchain_core.messages import HumanMessage, SystemMessage
+    llm = ChatOllama(
+        model=OLLAMA_LLM_MODEL,
+        temperature=0.1,
+        num_predict=600,
+        num_ctx=2048,
+    )
+    messages = [
+        SystemMessage(content=system_instruction),
+        HumanMessage(content=PROMPT_TEMPLATE.format(context=context, question=pregunta)),
+    ]
+
+    def _token_generator():
+        for chunk in llm.stream(messages):
+            if chunk.content:
+                yield chunk.content
+
+    return _token_generator(), docs, len(context) // 4
+
+
 # ─────────────────────────────────────────────
 # 6. EJECUCIÓN DIRECTA (modo script / prueba)
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     print("=" * 65)
-    print("🧠 CONSULTOR RAG — NEUROANATOMÍA CIENTÍFICA")
+    print("🧠 CONSULTOR RAG — NEUROANATOMÍA (100% LOCAL con Ollama)")
     print("=" * 65)
 
     vs = build_vector_store(force_rebuild=False)
@@ -494,9 +496,7 @@ if __name__ == "__main__":
     preguntas_prueba = [
         "¿Cuáles son las principales estructuras neuroanatómicas descritas?",
         "¿Qué hallazgos morfológicos o histológicos se reportan?",
-        # Prueba de Similitud de Coseno (Lenguaje coloquial -> Científico)
-        "¿Es útil usar gafas de videojuegos o de compu para estudiar la cabeza o el cerebro?",
-        # Prueba de Alucinación (Fuera de contexto / Veracidad)
+        "¿Es útil usar tecnología 3D para estudiar el cerebro?",
         "¿Cuál es la dosis de anestesia recomendada para una cirugía de columna?",
     ]
 
