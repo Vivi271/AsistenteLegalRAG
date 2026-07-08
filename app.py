@@ -29,19 +29,16 @@ if "is_admin" not in st.session_state:
 import urllib.request as _urllib_request
 import os as _os
 
-_gemini_key = _os.environ.get("GEMINI_API_KEY", _os.environ.get("GOOGLE_API_KEY", ""))
+_ollama_host = _os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+if not _ollama_host.startswith("http"):
+    _ollama_host = f"http://{_ollama_host}"
 
-if not _gemini_key:
-    _ollama_host = _os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    if not _ollama_host.startswith("http"):
-        _ollama_host = f"http://{_ollama_host}"
-
-    try:
-        _urllib_request.urlopen(f"{_ollama_host}/api/tags", timeout=3)
-    except Exception:
-        st.error("Ollama no está corriendo. Inicia Ollama en tu PC y recarga la página.")
-        st.info(f"Asegúrate de que Ollama esté activo en: {_ollama_host}\n\nEn macOS abre la aplicación Ollama o ejecuta `ollama serve` en la terminal.")
-        st.stop()
+try:
+    _urllib_request.urlopen(f"{_ollama_host}/api/tags", timeout=3)
+except Exception:
+    st.error("Ollama no está corriendo. Inicia Ollama en tu PC y recarga la página.")
+    st.info(f"Asegúrate de que Ollama esté activo en: {_ollama_host}\n\nEn macOS abre la aplicación Ollama o ejecuta `ollama serve` en la terminal.")
+    st.stop()
 
 try:
     from rag_pipeline import build_vector_store, consultar
