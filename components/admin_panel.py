@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import html as html_module
+from config import obtener_enlace_cloudflare
 
 def render_admin_panel():
     """
@@ -21,6 +22,24 @@ def render_admin_panel():
         PLOTLY_OK = False
 
     with st.expander("📊 Panel de Evaluación — Administrador", expanded=False):
+        # Enlace público de Cloudflare para el Administrador
+        cf_url = obtener_enlace_cloudflare()
+        if cf_url:
+            st.markdown(f"""
+            <div style="background-color: rgba(140, 198, 63, 0.08); border-left: 4px solid #8CC63F; padding: 12px; border-radius: 6px; margin-bottom: 15px;">
+                <span style="font-weight: 600; color: #7ab332; font-size: 0.85rem; display: block; margin-bottom: 2px;">🌐 ENLACE DE CONEXIÓN PÚBLICO (COMPARTIR)</span>
+                <span style="font-size: 0.8rem; color: #475569;">Copia este enlace para acceder desde tu celular u otra red:</span><br>
+                <a href="{cf_url}" target="_blank" style="color: #4a235a; font-weight: bold; text-decoration: underline; font-size: 0.85rem; word-break: break-all;">{cf_url}</a>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background-color: rgba(74, 35, 90, 0.04); border-left: 4px solid #4a235a; padding: 12px; border-radius: 6px; margin-bottom: 15px;">
+                <span style="font-weight: 600; color: #4a235a; font-size: 0.85rem; display: block; margin-bottom: 2px;">🌐 ENLACE DE CONEXIÓN PÚBLICO (COMPARTIR)</span>
+                <span style="font-size: 0.8rem; color: #64748b; font-style: italic;">Iniciando túnel seguro o no disponible. Recuerda que localmente puedes usar http://localhost:8502</span>
+            </div>
+            """, unsafe_allow_html=True)
+
         tab_metricas_rag, tab_gestion_preguntas = st.tabs([
             "📈 Métricas e Historial",
             "Gestión de Preguntas"

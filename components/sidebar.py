@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import html as html_module
-from config import ADMIN_PIN, nombre_legible, obtener_enlace_cloudflare
+from config import ADMIN_PIN, nombre_legible
 
 def render_sidebar(vs):
     """
@@ -26,38 +26,6 @@ def render_sidebar(vs):
              style="max-width: 180px; width: 100%; margin: 0 auto; display: block;">
     </div>
     """, unsafe_allow_html=True)
-
-    # --- INFORMACIÓN DE ACCESO RED (LOCAL Y PÚBLICO) ---
-    cf_url = obtener_enlace_cloudflare()
-    if cf_url:
-        st.markdown(f"""
-        <div style="background-color: rgba(140, 198, 63, 0.1); border: 1px solid rgba(140, 198, 63, 0.3); padding: 12px; border-radius: 8px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-            <div style="font-weight: 600; color: #7ab332; font-size: 0.85rem; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                🔗 ENLACE DE ACCESO PÚBLICO
-            </div>
-            <div style="font-size: 0.8rem; color: #334155; line-height: 1.4;">
-                Acceso móvil o desde cualquier red sin depender de tu IP:
-                <br>
-                <a href="{cf_url}" target="_blank" style="color: #4a235a; font-weight: bold; text-decoration: underline; word-break: break-all;">{cf_url}</a>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div style="background-color: rgba(74, 35, 90, 0.05); border: 1px solid rgba(74, 35, 90, 0.12); padding: 12px; border-radius: 8px; margin: 15px 0;">
-            <div style="font-weight: 600; color: #4a235a; font-size: 0.85rem; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                💻 ACCESO AL CONSULTOR
-            </div>
-            <div style="font-size: 0.8rem; color: #64748b; line-height: 1.4;">
-                En esta computadora usa siempre:<br>
-                <b>http://localhost:8502</b>
-                <br><br>
-                <span style="font-style: italic; font-size: 0.75rem; color: #94a3b8;">
-                    Generando túnel público para celulares/redes externas... (reinicia si tarda más de 1 min).
-                </span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
 
     # Directorio de documentos
     docs_dir = DOCS_DIR
