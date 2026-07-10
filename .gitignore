@@ -21,3 +21,5 @@ FlujoRag.txt
 .vscode/
 ~$*
 *.tmp
+shared_logs/
+

@@ -76,3 +76,26 @@ EJEMPLOS_CONSULTA = [
     ("¿Qué es el reflejo miotático y cómo se produce?",
      "El Lange describe el arco reflejo, los husos neuromusculares y los reflejos tendinosos profundos."),
 ]
+
+
+def obtener_enlace_cloudflare() -> str:
+    """
+    Lee el archivo de logs del túnel Cloudflare y extrae la URL generada.
+    """
+    import os
+    log_path = "/app/shared_logs/tunnel.log"
+    if not os.path.exists(log_path):
+        # Fallback local fuera del contenedor
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_logs", "tunnel.log")
+        if not os.path.exists(log_path):
+            return None
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        urls = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
+        if urls:
+            return urls[-1]
+    except Exception:
+        pass
+    return None
+
