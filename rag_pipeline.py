@@ -77,20 +77,22 @@ SYSTEM_INSTRUCTION_BASICO = """Eres un robot consultor de neuroanatomía para la
 Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
 
 REGLAS DE RIGUROSIDAD ABSOLUTA:
-1. Si el documento describe un concepto en una sola línea o frase, responde ÚNICAMENTE con esa línea o frase. Está prohibido alargar, deducir o complementar la respuesta.
-2. Si el documento no responde la pregunta exacta, di únicamente: "La información disponible en los documentos no cubre este tema."
-3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información.
-4. Responde SOLO a la pregunta. Si se pregunta por el cerebro, no hables del cerebelo ni de las meninges a menos que la pregunta lo requiera."""
+1. FILTRADO DE RELEVANCIA: Antes de responder, analiza los fragmentos proporcionados. Ignora y descarta por completo cualquier fragmento que NO hable directamente del tema consultado (ej. si se pregunta por el "cerebro", descarta y no menciones fragmentos que hablen del "cerebelo", "líquido cefalorraquídeo" o "médula espinal" a menos que expliquen directamente qué es el cerebro).
+2. Está estrictamente prohibido usar conocimiento externo o inventar hechos. Solo debes reportar lo que está escrito explícitamente en el texto.
+3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información como hechos.
+4. Responde SOLO a la pregunta. No incluyes información periférica ni resúmenes de fragmentos descartados.
+5. Si ningún fragmento es relevante o ninguno responde la pregunta, di únicamente: "Lo siento, no cuento con esa información"."""
 
 SYSTEM_INSTRUCTION_AVANZADO = """Eres un robot consultor de neuroanatomía clínica a nivel universitario para la Fundación Universitaria Konrad Lorenz.
 Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
 
 REGLAS DE RIGUROSIDAD ABSOLUTA:
-1. Si el documento describe un concepto en una sola línea o frase, responde ÚNICAMENTE con esa línea o frase. Está prohibido alargar, deducir o complementar la respuesta.
-2. Si el documento no responde la pregunta exacta, di únicamente: "La información disponible en los documentos no cubre este tema."
-3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información.
-4. Responde SOLO a la pregunta. Si se pregunta por el cerebro, no hables del cerebelo ni de las meninges a menos que la pregunta lo requiera.
-5. Solo incluye correlaciones clínicas si aparecen explícitamente en el texto proporcionado."""
+1. FILTRADO DE RELEVANCIA: Antes de responder, analiza los fragmentos proporcionados. Ignora y descarta por completo cualquier fragmento que NO hable directamente del tema consultado (ej. si se pregunta por el "cerebro", descarta y no menciones fragmentos que hablen del "cerebelo", "líquido cefalorraquídeo" o "médula espinal" a menos que expliquen directamente qué es el cerebro).
+2. Está estrictamente prohibido usar conocimiento externo o inventar hechos. Solo debes reportar lo que está escrito explícitamente en el texto.
+3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información como hechos.
+4. Responde SOLO a la pregunta. No incluyes información periférica ni resúmenes de fragmentos descartados.
+5. Si ningún fragmento es relevante o ninguno responde la pregunta, di únicamente: "Lo siento, no cuento con esa información".
+6. Solo incluye correlaciones clínicas si aparecen explícitamente en el texto proporcionado."""
 
 PROMPT_TEMPLATE = """DOCUMENTOS DE REFERENCIA:
 {context}
@@ -98,11 +100,10 @@ PROMPT_TEMPLATE = """DOCUMENTOS DE REFERENCIA:
 PREGUNTA DEL USUARIO: {question}
 
 INSTRUCCIONES DE RESPUESTA:
-- Responde a la pregunta utilizando ÚNICAMENTE los datos explícitos de los documentos de referencia.
-- Si los documentos contienen muy poca información, sé extremadamente breve (responde con una sola línea si es necesario). No inventes ni agregues nada externo.
-- Escribe la información directamente como un hecho. No uses introducciones como "según el documento", "el texto dice", etc.
-- Si la pregunta no se responde con los documentos, di: "La información disponible en los documentos no cubre este tema."
-- Al final, añade una sección titulada "Citas:" y enumera los archivos y páginas utilizados de forma directa (ejemplo: "- Neuroanatomía Clínica - Lange.pdf (pág. 15)").
+- Descarta y no uses los fragmentos que no hablen directamente del tema consultado (ej: si preguntan por el cerebro, descarta los fragmentos sobre el cerebelo o LCR).
+- Responde de forma CONCISA y al grano en viñetas cortas, usando ÚNICAMENTE información que responda de verdad a la pregunta.
+- Si ningún fragmento habla directamente sobre el tema consultado, responde únicamente con la frase exacta: "Lo siento, no cuento con esa información"
+- Si hay información válida, al final añade "Citas:" listando los nombres de archivos reales y páginas de los fragmentos que SÍ utilizaste para tu respuesta.
 
 Respuesta:"""
 
@@ -402,35 +403,19 @@ def _limpiar_texto_ocr(texto: str) -> str:
 def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "avanzado") -> dict:
     """
     PASOS 5-7 del pipeline RAG:
-    Recuperación vectorial híbrida (pregunta directa + HyDE) → Prompt aumentado → Generación local con Ollama
+    Recuperación vectorial directa → Prompt aumentado → Generación local con Ollama
     """
-    # PASO 5 — Recuperación HÍBRIDA: pregunta directa + HyDE
-    # 5a. Buscar con la pregunta directa (prioridad)
+    # PASO 5 — Recuperación directa
     docs_directos = vector_store.similarity_search(pregunta, k=k)
 
-    # 5b. Buscar con HyDE (complemento)
-    llm_hyde = ChatOllama(
-        model=OLLAMA_LLM_MODEL,
-        temperature=0.0,
-        num_predict=150,
-    )
-    hyde_prompt = f"Escribe un párrafo breve y científico en español que responda a: '{pregunta}'"
-    try:
-        hypothetical_doc = llm_hyde.invoke(hyde_prompt).content
-        docs_hyde = vector_store.similarity_search(hypothetical_doc, k=k)
-    except Exception:
-        docs_hyde = []
-
-    # 5c. Combinar resultados: priorizar directos, agregar HyDE sin duplicados
+    # Combinar resultados sin duplicados
     seen_contents = set()
     docs = []
-    for doc in docs_directos + docs_hyde:
+    for doc in docs_directos:
         content_key = doc.page_content[:100]
         if content_key not in seen_contents:
             seen_contents.add(content_key)
             docs.append(doc)
-        if len(docs) >= k:
-            break
 
     # PASO 6 — Construcción del prompt aumentado con citas reales del metadata
     context_parts = []
@@ -477,31 +462,17 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
     Se usa con st.write_stream() en Streamlit para streaming en tiempo real.
     Retorna: (generator, docs, context_tokens)
     """
-    # Recuperación HÍBRIDA: pregunta directa + HyDE
+    # Recuperación directa
     docs_directos = vector_store.similarity_search(pregunta, k=k)
 
-    llm_hyde = ChatOllama(
-        model=OLLAMA_LLM_MODEL,
-        temperature=0.0,
-        num_predict=150,
-    )
-    hyde_prompt = f"Escribe un párrafo breve y científico en español que responda a: '{pregunta}'"
-    try:
-        hypothetical_doc = llm_hyde.invoke(hyde_prompt).content
-        docs_hyde = vector_store.similarity_search(hypothetical_doc, k=k)
-    except Exception:
-        docs_hyde = []
-
-    # Combinar: priorizar directos, sin duplicados
+    # Combinar sin duplicados
     seen_contents = set()
     docs = []
-    for doc in docs_directos + docs_hyde:
+    for doc in docs_directos:
         content_key = doc.page_content[:100]
         if content_key not in seen_contents:
             seen_contents.add(content_key)
             docs.append(doc)
-        if len(docs) >= k:
-            break
 
     context_parts = []
     for i, doc in enumerate(docs):
