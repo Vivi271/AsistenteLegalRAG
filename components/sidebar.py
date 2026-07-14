@@ -4,7 +4,7 @@ import time
 import html as html_module
 from config import ADMIN_PIN, nombre_legible
 
-def render_sidebar(vs):
+def render_sidebar(vs, disabled=False):
     """
     Renderiza la barra lateral (logo, base de conocimiento, nivel de usuario,
     parámetros del motor, y acceso de administrador).
@@ -27,6 +27,9 @@ def render_sidebar(vs):
     </div>
     """, unsafe_allow_html=True)
 
+    if disabled:
+        st.info("⏳ Consulta en progreso. Por favor, espera a que termine para usar estos controles.")
+
     # Directorio de documentos
     docs_dir = DOCS_DIR
     os.makedirs(docs_dir, exist_ok=True)
@@ -41,6 +44,7 @@ def render_sidebar(vs):
                 type=["pdf", "docx"],
                 accept_multiple_files=True,
                 key="uploader_docs",
+                disabled=disabled,
                 help="Sube uno o más PDFs o archivos Word. Luego se indexarán automáticamente."
             )
             if nuevos_archivos:
@@ -82,7 +86,7 @@ def render_sidebar(vs):
                             unsafe_allow_html=True
                         )
                     with col_d:
-                        if st.button("🗑️", key=f"del_{pdf}", help=f"Eliminar {pdf}"):
+                        if st.button("🗑️", key=f"del_{pdf}", help=f"Eliminar {pdf}", disabled=disabled):
                             st.session_state["_pending_delete"] = pdf
 
                 # Confirmación de eliminación
@@ -92,7 +96,7 @@ def render_sidebar(vs):
                     st.warning(f"¿Eliminar **{nombre_pending}**?")
                     col_si, col_no = st.columns(2)
                     with col_si:
-                        if st.button("Sí, eliminar", key="confirmar_delete", use_container_width=True):
+                        if st.button("Sí, eliminar", key="confirmar_delete", use_container_width=True, disabled=disabled):
                             os.remove(os.path.join(docs_dir, pending))
                             with st.spinner(f"Eliminando vectores..."):
                                 try:
@@ -105,7 +109,7 @@ def render_sidebar(vs):
                             st.session_state["_pending_delete"] = None
                             st.rerun()
                     with col_no:
-                        if st.button("Cancelar", key="cancelar_delete", use_container_width=True):
+                        if st.button("Cancelar", key="cancelar_delete", use_container_width=True, disabled=disabled):
                             st.session_state["_pending_delete"] = None
                             st.rerun()
             else:
@@ -114,22 +118,23 @@ def render_sidebar(vs):
     st.markdown("---")
     st.markdown("### Perfil de Usuario (Nivel)")
     nivel = st.radio(
-        "Selecciona tu nivel de conocimiento:",
-        options=["Básico", "Avanzado"],
-        index=1,
-        help="Básico: Explicaciones sencillas.\nAvanzado: Rigor académico."
-    )
+         "Selecciona tu nivel de conocimiento:",
+         options=["Básico", "Avanzado"],
+         index=1,
+         disabled=disabled,
+         help="Básico: Explicaciones sencillas.\nAvanzado: Rigor académico."
+     )
     
     st.markdown("<br>", unsafe_allow_html=True)
     
     # Botón de autoevaluación (el modal se llamará en app.py si se pulsa)
-    lanzar_evaluacion = st.button("Realizar Autoevaluación", use_container_width=True, key="realizar_evaluacion_btn")
+    lanzar_evaluacion = st.button("Realizar Autoevaluación", use_container_width=True, key="realizar_evaluacion_btn", disabled=disabled)
 
     # ── Parámetros del motor (solo para admin) ──
     if is_admin:
         with st.container():
             st.markdown("### Parámetros del Motor")
-            k_chunks = st.slider("Fragmentos a recuperar (k)", min_value=3, max_value=8, value=5, key="admin_slider_k")
+            k_chunks = st.slider("Fragmentos a recuperar (k)", min_value=3, max_value=8, value=5, key="admin_slider_k", disabled=disabled)
             
             st.markdown("""
             <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; font-size: 0.82rem; color: #94a3b8; margin-top: 10px;">
@@ -144,7 +149,7 @@ def render_sidebar(vs):
             </div>
             """, unsafe_allow_html=True)
     else:
-        k_chunks = 5
+        k_chunks = 6
         
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -179,7 +184,7 @@ def render_sidebar(vs):
                     st.info("Indexando archivos pendientes...")
                 else:
                     st.warning(f"{_sidebar_count} vectores — {len(_sin_indexar)} pendientes")
-                    if st.button(f"Indexar pendientes ({len(_sin_indexar)})", use_container_width=True, key="btn_sync"):
+                    if st.button(f"Indexar pendientes ({len(_sin_indexar)})", use_container_width=True, key="btn_sync", disabled=disabled):
                         st.session_state["_iniciar_indexado"] = sorted(list(_sin_indexar))
                         st.rerun()
 
@@ -204,7 +209,7 @@ def render_sidebar(vs):
 
             # Botón de rebuild completo
             with st.expander("🛠️ Reparar / Reconstruir DB completa", expanded=False):
-                if st.button("Reconstruir VectorDB", use_container_width=True, key="rebuild_db_btn"):
+                if st.button("Reconstruir VectorDB", use_container_width=True, key="rebuild_db_btn", disabled=disabled):
                     with st.spinner("Reconstruyendo base de datos completa..."):
                         try:
                             from app import get_vector_store
@@ -238,13 +243,15 @@ def render_sidebar(vs):
     if is_admin:
         with st.container():
             st.markdown("<div style='text-align:center; font-size:0.8rem; color:#22c55e; padding:4px 0;'>🔓 Modo Administrador activo</div>", unsafe_allow_html=True)
-            if st.button("Cerrar sesión admin", use_container_width=True, key="logout_admin"):
+            if st.button("Cerrar sesión admin", use_container_width=True, key="logout_admin", disabled=disabled):
                 st.session_state.is_admin = False
                 st.rerun()
     else:
         with st.expander("Acceso administrador", expanded=False):
-            pin_input = st.text_input("PIN de acceso:", type="password", max_chars=4, key="admin_pin_input")
-            if st.button("Ingresar", use_container_width=True, key="login_admin"):
+            if disabled:
+                st.caption("⏳ Espera a que termine la consulta para ingresar...")
+            pin_input = st.text_input("PIN de acceso:", type="password", max_chars=4, key="admin_pin_input", disabled=disabled)
+            if st.button("Ingresar", use_container_width=True, key="login_admin", disabled=disabled):
                 if pin_input == ADMIN_PIN:
                     st.session_state.is_admin = True
                     st.rerun()

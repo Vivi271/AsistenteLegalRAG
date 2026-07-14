@@ -30,6 +30,8 @@ if "historial" not in st.session_state:
     st.session_state.historial = []
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
+if "is_generating" not in st.session_state:
+    st.session_state.is_generating = False
 
 import urllib.request as _urllib_request
 import os as _os
@@ -178,6 +180,7 @@ def mostrar_evaluacion(nivel):
 
 # ── 4. Renderizar Componentes de UI ──
 # Título minimalista en lugar de un gran header
+
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
@@ -185,7 +188,7 @@ clase_vacio = "chat-vacio" if len(st.session_state.mensajes) == 0 else "chat-con
 st.markdown(f"<h2 class='main-title {clase_vacio}'>Consultor IA Neuroanatomía</h2>", unsafe_allow_html=True)
 
 with st.sidebar:
-    nivel, k_chunks, is_admin, lanzar_evaluacion, vs = render_sidebar(vs)
+    nivel, k_chunks, is_admin, lanzar_evaluacion, vs = render_sidebar(vs, disabled=st.session_state.is_generating)
 
 # Activar dialog de autoevaluación si se pulsó el botón
 if lanzar_evaluacion:
@@ -200,7 +203,7 @@ if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
 # Capturar input del usuario ANTES de renderizar
-pregunta_usuario = st.chat_input("Escribe tu consulta sobre neuroanatomía...")
+pregunta_usuario = st.chat_input("Escribe tu consulta sobre neuroanatomía...", key="chat_query", disabled=st.session_state.is_generating)
 
 # Revisar si se hizo clic en un ejemplo
 if st.session_state.get("pregunta_ejemplo"):
@@ -211,8 +214,8 @@ if st.session_state.get("pregunta_ejemplo"):
 chat_container = st.container()
 
 with chat_container:
-    # Si el chat está vacío, mostrar los ejemplos en el centro
-    if len(st.session_state.mensajes) == 0 and not pregunta_usuario:
+    # Si el chat está vacío y no hay consultas en curso, mostrar los ejemplos en el centro
+    if len(st.session_state.mensajes) == 0 and not pregunta_usuario and not st.session_state.get("pregunta_activa"):
         st.markdown("<h3 style='text-align:center; color:#64748b; font-weight:400; font-size: 1.2rem; margin-bottom: 2rem;'>¿En qué te puedo ayudar hoy?</h3>", unsafe_allow_html=True)
         
         st.markdown("<h4 style='text-align:center; color:#8CC63F; font-size: 0.9rem; font-weight: 600; margin-bottom: 1.5rem; letter-spacing: 0.8px;'>PREGUNTAS SUGERIDAS DE EJEMPLO</h4>", unsafe_allow_html=True)
@@ -255,21 +258,28 @@ with chat_container:
                     key=f"dl_{msg['id']}"
                 )
 
-    # Procesar nueva pregunta
+    # Guardar en estado y re-ejecutar para desactivar controles en el sidebar antes de procesar
     if pregunta_usuario:
         if not pregunta_usuario.strip():
             st.warning("Por favor, escribe una pregunta válida.")
         else:
-            st.session_state.historial.append(pregunta_usuario)
+            st.session_state.pregunta_activa = pregunta_usuario
+            st.session_state.is_generating = True
+            st.rerun()
+
+    # Procesar nueva pregunta en la ejecución deshabilitada
+    pregunta_a_procesar = st.session_state.get("pregunta_activa")
+    if pregunta_a_procesar:
+        st.session_state.historial.append(pregunta_a_procesar)
+        
+        # Guardar y mostrar el mensaje del usuario
+        st.session_state.mensajes.append({"role": "user", "content": pregunta_a_procesar, "id": str(time.time())})
+        with st.chat_message("user"):
+            st.markdown(pregunta_a_procesar)
             
-            # Guardar y mostrar el mensaje del usuario
-            st.session_state.mensajes.append({"role": "user", "content": pregunta_usuario, "id": str(time.time())})
-            with st.chat_message("user"):
-                st.markdown(pregunta_usuario)
-                
-            # Preparar contenedor del asistente con streaming
-            with st.chat_message("assistant"):
-                try:
+        # Preparar contenedor del asistente con streaming
+        with st.chat_message("assistant"):
+            try:
                     # Mostrar puntos suspensivos animados mientras piensa
                     thinking_placeholder = st.empty()
                     thinking_placeholder.markdown(
@@ -293,7 +303,7 @@ with chat_container:
                     )
                     
                     t_start = time.time()
-                    token_gen, docs, ctx_tokens = stream_consultar(pregunta_usuario, vs, k=k_chunks, nivel=nivel)
+                    token_gen, docs, ctx_tokens = stream_consultar(pregunta_a_procesar, vs, k=k_chunks, nivel=nivel)
                     
                     # Envolver generador para quitar los puntos al primer token
                     def _stream_with_clear():
@@ -309,9 +319,9 @@ with chat_container:
                     latencia = time.time() - t_start
                     
                     es_respuesta_sin_info = any(p in respuesta_texto.lower() for p in NO_INFO_PHRASES)
-                    es_saludo = any(s in pregunta_usuario.strip().lower() for s in SALUDOS)
+                    es_saludo = any(s in pregunta_a_procesar.strip().lower() for s in SALUDOS)
                     
-                    registrar_consulta(pregunta_usuario, respuesta_texto, nivel.lower(), latencia)
+                    registrar_consulta(pregunta_a_procesar, respuesta_texto, nivel.lower(), latencia)
                     
                     if es_respuesta_sin_info:
                         st.markdown(
@@ -344,7 +354,7 @@ with chat_container:
                         # Generar archivo descargable
                         fuentes_txt = "\n".join([f"  [{i+1}] {nombre_legible(os.path.basename(d.metadata.get('source','?')))} — Pág. {d.metadata.get('page','?')}" for i, d in enumerate(docs)])
                         
-                        reporte_txt = f"=========================================\nCONSULTA NEUROANATÓMICA — REPORTE RAG\n=========================================\n\nPREGUNTA:\n{pregunta_usuario}\n\nRESPUESTA:\n{respuesta_texto}\n\nFUENTES BASADAS EN LITERATURA:\n{fuentes_txt}\n\n========================================="
+                        reporte_txt = f"=========================================\nCONSULTA NEUROANATÓMICA — REPORTE RAG\n=========================================\n\nPREGUNTA:\n{pregunta_a_procesar}\n\nRESPUESTA:\n{respuesta_texto}\n\nFUENTES BASADAS EN LITERATURA:\n{fuentes_txt}\n\n========================================="
                         
                         st.download_button(
                             label="📥 Descargar Reporte PDF/TXT",
@@ -363,9 +373,15 @@ with chat_container:
                         "reporte": reporte_txt,
                         "id": str(time.time())
                     })
+                    st.session_state.pregunta_activa = None
+                    st.session_state.pregunta_ejemplo = None
+                    st.session_state.is_generating = False
                     # Forzar re-render limpio para eliminar fantasmas
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Error al generar respuesta: {str(e)}")
+            except Exception as e:
+                st.session_state.pregunta_activa = None
+                st.session_state.pregunta_ejemplo = None
+                st.session_state.is_generating = False
+                st.error(f"Error al generar respuesta: {str(e)}")
 
 

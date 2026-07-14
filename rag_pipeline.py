@@ -63,9 +63,8 @@ COLLECTION_NAME = "neuroanatomia_cientifica"
 # ─────────────────────────────────────────────
 # 2. MODELOS — 100% LOCAL via Ollama
 # ─────────────────────────────────────────────
-# Modelo de embeddings local: nomic-embed-text (274 MB, sin cuotas)
 OLLAMA_EMBED_MODEL = "nomic-embed-text"
-OLLAMA_LLM_MODEL   = "qwen2.5:1.5b"   # 2 GB — ya instalado. Cambiar a llama3.1:8b o qwen2.5:7b si hay más RAM
+OLLAMA_LLM_MODEL   = "llama3:latest"
 
 embeddings_model = OllamaEmbeddings(
     model=OLLAMA_EMBED_MODEL,
@@ -74,38 +73,38 @@ embeddings_model = OllamaEmbeddings(
 # ─────────────────────────────────────────────
 # 3. SYSTEM PROMPT — Identidad del consultor
 # ─────────────────────────────────────────────
-SYSTEM_INSTRUCTION_BASICO = """Eres un consultor de neuroanatomía para público general, asociado a la Fundación Universitaria Konrad Lorenz.
-Explica de forma sencilla, didáctica y clara. Usa analogías cotidianas cuando ayuden a entender.
+SYSTEM_INSTRUCTION_BASICO = """Eres un robot consultor de neuroanatomía para la Fundación Universitaria Konrad Lorenz.
+Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
 
-Tu misión es responder consultas sobre neuroanatomía. Si te preguntan por definiciones o conceptos anatómicos generales (por ejemplo: qué es el cerebro, qué es una neurona, qué es la médula espinal), puedes usar tu conocimiento general de base para dar una respuesta completa y educada, integrándola de forma natural con los fragmentos del <contexto> proporcionado.
+REGLAS DE RIGUROSIDAD ABSOLUTA:
+1. Si el documento describe un concepto en una sola línea o frase, responde ÚNICAMENTE con esa línea o frase. Está prohibido alargar, deducir o complementar la respuesta.
+2. Si el documento no responde la pregunta exacta, di únicamente: "La información disponible en los documentos no cubre este tema."
+3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información.
+4. Responde SOLO a la pregunta. Si se pregunta por el cerebro, no hables del cerebelo ni de las meninges a menos que la pregunta lo requiera."""
 
-REGLAS:
-1. Si la <pregunta> es un saludo (hola, gracias, qué tal): responde amigablemente y sugiere preguntar sobre neuroanatomía.
-2. Si los documentos del <contexto> contienen detalles específicos del tema consultado: explícalos de forma didáctica. Cita la fuente al final de la respuesta.
-3. Si la pregunta no tiene relación alguna con neuroanatomía ni medicina: responde "Esta información no se encuentra en los documentos científicos disponibles."
-4. No inventes datos específicos clínicos (nombres de estudios, cifras de prevalencia exactas, autores) que no estén en el contexto."""
+SYSTEM_INSTRUCTION_AVANZADO = """Eres un robot consultor de neuroanatomía clínica a nivel universitario para la Fundación Universitaria Konrad Lorenz.
+Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
 
-SYSTEM_INSTRUCTION_AVANZADO = """Eres un consultor especialista en neuroanatomía clínica para nivel universitario, asociado a la Fundación Universitaria Konrad Lorenz.
-Responde con alta rigurosidad académica, precisión terminológica y profundidad conceptual.
+REGLAS DE RIGUROSIDAD ABSOLUTA:
+1. Si el documento describe un concepto en una sola línea o frase, responde ÚNICAMENTE con esa línea o frase. Está prohibido alargar, deducir o complementar la respuesta.
+2. Si el documento no responde la pregunta exacta, di únicamente: "La información disponible en los documentos no cubre este tema."
+3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información.
+4. Responde SOLO a la pregunta. Si se pregunta por el cerebro, no hables del cerebelo ni de las meninges a menos que la pregunta lo requiera.
+5. Solo incluye correlaciones clínicas si aparecen explícitamente en el texto proporcionado."""
 
-Tu misión es resolver consultas de neuroanatomía. Si te preguntan por definiciones o conceptos anatómicos generales (como qué es el cerebro, qué es una neurona, etc.), puedes utilizar tu conocimiento de base para dar una definición científica sólida, integrándola de forma fluida con los datos y fragmentos clínicos del <contexto> proporcionado.
-
-REGLAS:
-1. Si la <pregunta> es un saludo (hola, gracias, qué tal): responde amigablemente y sugiere preguntar sobre neuroanatomía.
-2. Si los documentos del <contexto> contienen detalles específicos del tema consultado: sintetízalos con precisión terminológica y describe los tractos o núcleos correspondientes. Cita la fuente al final de la respuesta.
-3. Si la pregunta no tiene relación alguna con neuroanatomía ni medicina: responde "Esta información no se encuentra en los documentos científicos disponibles."
-4. No inventes datos específicos clínicos (nombres de estudios, cifras de prevalencia exactas, autores) que no estén en el contexto."""
-
-PROMPT_TEMPLATE = """
-<contexto>
+PROMPT_TEMPLATE = """DOCUMENTOS DE REFERENCIA:
 {context}
-</contexto>
 
-<pregunta>
-{question}
-</pregunta>
+PREGUNTA DEL USUARIO: {question}
 
-IMPORTANTE: Responde usando la información del <contexto>. Si la respuesta no está en el contexto, responde ÚNICAMENTE: "Esta información no se encuentra en los documentos científicos disponibles." sin agregar ninguna otra explicación."""
+INSTRUCCIONES DE RESPUESTA:
+- Responde a la pregunta utilizando ÚNICAMENTE los datos explícitos de los documentos de referencia.
+- Si los documentos contienen muy poca información, sé extremadamente breve (responde con una sola línea si es necesario). No inventes ni agregues nada externo.
+- Escribe la información directamente como un hecho. No uses introducciones como "según el documento", "el texto dice", etc.
+- Si la pregunta no se responde con los documentos, di: "La información disponible en los documentos no cubre este tema."
+- Al final, añade una sección titulada "Citas:" y enumera los archivos y páginas utilizados de forma directa (ejemplo: "- Neuroanatomía Clínica - Lange.pdf (pág. 15)").
+
+Respuesta:"""
 
 
 # ─────────────────────────────────────────────
@@ -373,45 +372,86 @@ def add_documents_incremental(new_pdf_paths: list, vs_existente=None):
     return vs
 
 
+def _limpiar_texto_ocr(texto: str) -> str:
+    """Corrige errores comunes de extracción de PDF (OCR) para ayudar al modelo."""
+    if not texto:
+        return texto
+    # Corregir saltos de línea con guiones
+    texto = texto.replace("-\n", "").replace("- \n", "")
+    # Corregir espaciados rotos y typos del OCR
+    reemplazos = {
+        "co mplejo": "complejo",
+        "neur ociencia": "neurociencia",
+        "neur oanatomía": "neuroanatomía",
+        "sist ema": "sistema",
+        "es encial": "esencial",
+        "cavi-dad": "cavidad",
+        "cavi- dad": "cavidad",
+        "cavi dad": "cavidad",
+        "aluminio cinaciones": "alucinaciones",
+        "aluminio cinacion": "alucinación",
+    }
+    for roto, corregido in reemplazos.items():
+        texto = texto.replace(roto, corregido)
+    return texto
+
+
 # ─────────────────────────────────────────────
 # 5. CONSULTA RAG — 100% LOCAL con Ollama LLM
 # ─────────────────────────────────────────────
 def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "avanzado") -> dict:
     """
     PASOS 5-7 del pipeline RAG:
-    Recuperación vectorial → Prompt aumentado → Generación local con Ollama
+    Recuperación vectorial híbrida (pregunta directa + HyDE) → Prompt aumentado → Generación local con Ollama
     """
-    # PASO 5 — Recuperación
-    retriever = vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": k},
-    )
-    docs = retriever.invoke(pregunta)
+    # PASO 5 — Recuperación HÍBRIDA: pregunta directa + HyDE
+    # 5a. Buscar con la pregunta directa (prioridad)
+    docs_directos = vector_store.similarity_search(pregunta, k=k)
 
-    # PASO 6 — Construcción del prompt aumentado
+    # 5b. Buscar con HyDE (complemento)
+    llm_hyde = ChatOllama(
+        model=OLLAMA_LLM_MODEL,
+        temperature=0.0,
+        num_predict=150,
+    )
+    hyde_prompt = f"Escribe un párrafo breve y científico en español que responda a: '{pregunta}'"
+    try:
+        hypothetical_doc = llm_hyde.invoke(hyde_prompt).content
+        docs_hyde = vector_store.similarity_search(hypothetical_doc, k=k)
+    except Exception:
+        docs_hyde = []
+
+    # 5c. Combinar resultados: priorizar directos, agregar HyDE sin duplicados
+    seen_contents = set()
+    docs = []
+    for doc in docs_directos + docs_hyde:
+        content_key = doc.page_content[:100]
+        if content_key not in seen_contents:
+            seen_contents.add(content_key)
+            docs.append(doc)
+        if len(docs) >= k:
+            break
+
+    # PASO 6 — Construcción del prompt aumentado con citas reales del metadata
     context_parts = []
-    for i, doc in enumerate(docs, 1):
+    for i, doc in enumerate(docs):
         fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
         pagina = doc.metadata.get("page", "?")
+        contenido_limpio = _limpiar_texto_ocr(doc.page_content)
         context_parts.append(
-            f"[Fragmento {i} — {fuente}, Pág. {pagina}]\n{doc.page_content}"
+            f"[Fragmento {i+1}] Archivo: {fuente} | Página: {pagina}\n{contenido_limpio}"
         )
     context = "\n\n---\n\n".join(context_parts)
 
     system_instruction = SYSTEM_INSTRUCTION_AVANZADO if nivel.lower() == "avanzado" else SYSTEM_INSTRUCTION_BASICO
 
-    prompt_completo = (
-        system_instruction
-        + "\n\n"
-        + PROMPT_TEMPLATE.format(context=context, question=pregunta)
-    )
-
     # PASO 7 — Generación LOCAL con Ollama (sin internet, sin cuotas)
     llm = ChatOllama(
         model=OLLAMA_LLM_MODEL,
-        temperature=0.1,
-        num_predict=600,   # Límite explícito para respuestas ágiles en CPU Intel
-        num_ctx=4096,      # Ventana de contexto para procesar fragmentos completos
+        temperature=0.0,
+        repeat_penalty=1.3,
+        num_predict=800,
+        num_ctx=4096,
     )
 
     # pyrefly: ignore [missing-import]
@@ -437,18 +477,39 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
     Se usa con st.write_stream() en Streamlit para streaming en tiempo real.
     Retorna: (generator, docs, context_tokens)
     """
-    retriever = vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": k},
+    # Recuperación HÍBRIDA: pregunta directa + HyDE
+    docs_directos = vector_store.similarity_search(pregunta, k=k)
+
+    llm_hyde = ChatOllama(
+        model=OLLAMA_LLM_MODEL,
+        temperature=0.0,
+        num_predict=150,
     )
-    docs = retriever.invoke(pregunta)
+    hyde_prompt = f"Escribe un párrafo breve y científico en español que responda a: '{pregunta}'"
+    try:
+        hypothetical_doc = llm_hyde.invoke(hyde_prompt).content
+        docs_hyde = vector_store.similarity_search(hypothetical_doc, k=k)
+    except Exception:
+        docs_hyde = []
+
+    # Combinar: priorizar directos, sin duplicados
+    seen_contents = set()
+    docs = []
+    for doc in docs_directos + docs_hyde:
+        content_key = doc.page_content[:100]
+        if content_key not in seen_contents:
+            seen_contents.add(content_key)
+            docs.append(doc)
+        if len(docs) >= k:
+            break
 
     context_parts = []
-    for i, doc in enumerate(docs, 1):
+    for i, doc in enumerate(docs):
         fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
         pagina = doc.metadata.get("page", "?")
+        contenido_limpio = _limpiar_texto_ocr(doc.page_content)
         context_parts.append(
-            f"[Fragmento {i} — {fuente}, Pág. {pagina}]\n{doc.page_content}"
+            f"[Fragmento {i+1}] Archivo: {fuente} | Página: {pagina}\n{contenido_limpio}"
         )
     context = "\n\n---\n\n".join(context_parts)
 
@@ -458,8 +519,9 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
     from langchain_core.messages import HumanMessage, SystemMessage
     llm = ChatOllama(
         model=OLLAMA_LLM_MODEL,
-        temperature=0.1,
-        num_predict=600,
+        temperature=0.0,
+        repeat_penalty=1.3,
+        num_predict=800,
         num_ctx=4096,
     )
     messages = [
