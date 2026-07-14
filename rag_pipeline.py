@@ -64,7 +64,7 @@ COLLECTION_NAME = "neuroanatomia_cientifica"
 # 2. MODELOS — 100% LOCAL via Ollama
 # ─────────────────────────────────────────────
 OLLAMA_EMBED_MODEL = "nomic-embed-text"
-OLLAMA_LLM_MODEL   = "llama3:latest"
+OLLAMA_LLM_MODEL   = "llama3.2:latest"
 
 embeddings_model = OllamaEmbeddings(
     model=OLLAMA_EMBED_MODEL,
@@ -73,37 +73,29 @@ embeddings_model = OllamaEmbeddings(
 # ─────────────────────────────────────────────
 # 3. SYSTEM PROMPT — Identidad del consultor
 # ─────────────────────────────────────────────
-SYSTEM_INSTRUCTION_BASICO = """Eres un robot consultor de neuroanatomía para la Fundación Universitaria Konrad Lorenz.
-Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
+SYSTEM_INSTRUCTION_BASICO = """Eres un sintetizador de información neuroanatómica estrictamente extractivo para la Fundación Universitaria Konrad Lorenz.
+Tu tarea es responder a la pregunta del usuario utilizando EXCLUSIVAMENTE los fragmentos de texto provistos.
 
-REGLAS DE RIGUROSIDAD ABSOLUTA:
-1. FILTRADO DE RELEVANCIA: Antes de responder, analiza los fragmentos proporcionados. Ignora y descarta por completo cualquier fragmento que NO hable directamente del tema consultado (ej. si se pregunta por el "cerebro", descarta y no menciones fragmentos que hablen del "cerebelo", "líquido cefalorraquídeo" o "médula espinal" a menos que expliquen directamente qué es el cerebro).
-2. Está estrictamente prohibido usar conocimiento externo o inventar hechos. Solo debes reportar lo que está escrito explícitamente en el texto.
-3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información como hechos.
-4. Responde SOLO a la pregunta. No incluyes información periférica ni resúmenes de fragmentos descartados.
-5. Si ningún fragmento es relevante o ninguno responde la pregunta, di únicamente: "Lo siento, no cuento con esa información"."""
+REGLAS ABSOLUTAS DE EXTRACCIÓN (Cero Conocimiento Externo):
+1. NUNCA agregues explicaciones, definiciones, funciones, propósitos o detalles que no estén escritos de forma explícita y literal en los fragmentos de texto provistos.
+2. Si un fragmento menciona una estructura (ej. "cerebelo" o "arterias") pero no describe su función o propósito, NO inventes ni agregues qué hace o para qué sirve. Limítate a nombrarla tal como aparece.
+3. Cualquier dato o aclaración que provenga de tu base de conocimiento interna (preentrenamiento) y no de los fragmentos de texto provistos es considerada una ALUCINACIÓN y es inaceptable.
+4. Si los fragmentos no contienen información que responda de forma directa a la pregunta, debes responder ÚNICAMENTE: "Lo siento, no cuento con esa información." y nada más.
+5. Escribe de forma directa y objetiva. Está TERMINANTEMENTE PROHIBIDO usar lenguaje meta-textual ("el fragmento menciona", "según el archivo", "los documentos indican").
+6. Estructura la respuesta con listas y negritas, pero sé extremadamente conciso y limítate a los hechos literales."""
 
-SYSTEM_INSTRUCTION_AVANZADO = """Eres un robot consultor de neuroanatomía clínica a nivel universitario para la Fundación Universitaria Konrad Lorenz.
-Tu ÚNICA fuente de conocimiento son los DOCUMENTOS DE REFERENCIA proporcionados a continuación. Está TERMINANTEMENTE PROHIBIDO usar conocimiento externo, preentrenado o general.
+SYSTEM_INSTRUCTION_AVANZADO = SYSTEM_INSTRUCTION_BASICO
 
-REGLAS DE RIGUROSIDAD ABSOLUTA:
-1. FILTRADO DE RELEVANCIA: Antes de responder, analiza los fragmentos proporcionados. Ignora y descarta por completo cualquier fragmento que NO hable directamente del tema consultado (ej. si se pregunta por el "cerebro", descarta y no menciones fragmentos que hablen del "cerebelo", "líquido cefalorraquídeo" o "médula espinal" a menos que expliquen directamente qué es el cerebro).
-2. Está estrictamente prohibido usar conocimiento externo o inventar hechos. Solo debes reportar lo que está escrito explícitamente en el texto.
-3. PROHIBIDO usar lenguaje meta-textual (ej: "el documento menciona", "según el archivo", "en la página X", "como se indica"). Escribe directamente la información como hechos.
-4. Responde SOLO a la pregunta. No incluyes información periférica ni resúmenes de fragmentos descartados.
-5. Si ningún fragmento es relevante o ninguno responde la pregunta, di únicamente: "Lo siento, no cuento con esa información".
-6. Solo incluye correlaciones clínicas si aparecen explícitamente en el texto proporcionado."""
-
-PROMPT_TEMPLATE = """DOCUMENTOS DE REFERENCIA:
+PROMPT_TEMPLATE = """FRAGMENTOS DE TEXTO DE REFERENCIA (extraídos de libros de neuroanatomía):
 {context}
 
-PREGUNTA DEL USUARIO: {question}
+PREGUNTA: {question}
 
-INSTRUCCIONES DE RESPUESTA:
-- Descarta y no uses los fragmentos que no hablen directamente del tema consultado (ej: si preguntan por el cerebro, descarta los fragmentos sobre el cerebelo o LCR).
-- Responde de forma CONCISA y al grano en viñetas cortas, usando ÚNICAMENTE información que responda de verdad a la pregunta.
-- Si ningún fragmento habla directamente sobre el tema consultado, responde únicamente con la frase exacta: "Lo siento, no cuento con esa información"
-- Si hay información válida, al final añade "Citas:" listando los nombres de archivos reales y páginas de los fragmentos que SÍ utilizaste para tu respuesta.
+Responde de forma académica, precisa y concisa usando SOLO los datos de los fragmentos anteriores.
+- Incluye definiciones, componentes y funciones relevantes.
+- Extrae SOLO la información pertinente a la pregunta de cada fragmento.
+- Si un fragmento parece ser una tabla o índice con texto desordenado, ignóralo si no puedes interpretar con certeza su contenido.
+- Si ningún fragmento responde la pregunta, di: "Lo siento, no cuento con esa información."
 
 Respuesta:"""
 
@@ -398,28 +390,229 @@ def _limpiar_texto_ocr(texto: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# 5. CONSULTA RAG — 100% LOCAL con Ollama LLM
+# 5. SINÓNIMOS NEUROANATÓMICOS PARA EXPANSIÓN DE QUERY
 # ─────────────────────────────────────────────
-def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "avanzado") -> dict:
+# Cada clave es un término coloquial/común, y los valores son sinónimos
+# técnicos que aparecen en los libros de texto pero que el estudiante
+# probablemente no escribirá en su consulta.
+import unicodedata
+
+def _normalizar_acentos(texto: str) -> str:
+    """Elimina acentos y diacríticos del texto para búsquedas insensibles a tildes."""
+    if not texto:
+        return ""
+    # Normalizar a NFKD y filtrar caracteres de combinación diacrítica (tildes, etc.)
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", texto)
+        if not unicodedata.combining(c)
+    )
+
+_SINONIMOS_NEURO = {
+    "cerebro": ["cerebrum", "encéfalo", "hemisferios cerebrales", "telencéfalo", "corteza cerebral"],
+    "cerebelo": ["cerebellum", "corteza cerebelosa", "núcleos cerebelosos"],
+    "tronco encefálico": ["tallo cerebral", "brainstem", "bulbo raquídeo", "protuberancia", "mesencéfalo"],
+    "médula espinal": ["medula espinal", "spinal cord", "cordón espinal"],
+    "hipotálamo": ["hypothalamus", "región hipotalámica"],
+    "tálamo": ["thalamus", "núcleos talámicos"],
+    "hipocampo": ["hippocampus", "formación hipocampal"],
+    "amígdala": ["amygdala", "complejo amigdalino", "núcleo amigdalino"],
+    "ganglios basales": ["núcleos basales", "cuerpo estriado", "basal ganglia"],
+    "meninges": ["duramadre", "aracnoides", "piamadre", "membranas meníngeas"],
+    "ventrículos": ["ventrículo lateral", "tercer ventrículo", "cuarto ventrículo", "sistema ventricular"],
+    "nervios craneales": ["pares craneales", "cranial nerves"],
+    "lóbulo frontal": ["corteza frontal", "corteza prefrontal", "área de Broca"],
+    "lóbulo temporal": ["corteza temporal", "área de Wernicke"],
+    "lóbulo parietal": ["corteza parietal", "corteza somatosensorial"],
+    "lóbulo occipital": ["corteza occipital", "corteza visual"],
+    "sistema límbico": ["limbic system", "circuito de Papez"],
+    "sustancia blanca": ["materia blanca", "white matter"],
+    "sustancia gris": ["materia gris", "grey matter", "gray matter"],
+    "neurona": ["neuronas", "célula nerviosa", "células nerviosas"],
+    "sinapsis": ["synapse", "unión sináptica", "transmisión sináptica"],
+    "neurotransmisor": ["neurotransmisores", "neurotransmitter"],
+    "líquido cefalorraquídeo": ["LCR", "CSF", "cerebrospinal fluid"],
+    "diencéfalo": ["diencephalon", "tálamo", "hipotálamo", "epitálamo"],
+}
+
+_STOPWORDS_ES = {
+    "que", "es", "el", "la", "un", "una", "de", "del", "en", "y", "o",
+    "a", "para", "con", "por", "si", "no", "cual", "cuales", "como",
+    "su", "sus", "los", "las", "al", "se", "lo", "le", "qué", "cómo",
+}
+
+
+def _expandir_query(pregunta: str) -> str:
+    """
+    Expande la pregunta del usuario agregando sinónimos técnicos
+    neuroanatómicos para mejorar la recuperación vectorial.
+    """
+    preg_norm = _normalizar_acentos(pregunta.lower())
+    terminos_extra = []
+    for termino, sinonimos in _SINONIMOS_NEURO.items():
+        term_norm = _normalizar_acentos(termino.lower())
+        if term_norm in preg_norm:
+            terminos_extra.extend(sinonimos)
+    if terminos_extra:
+        return pregunta + " " + " ".join(terminos_extra)
+    return pregunta
+
+
+def _get_query_keywords(pregunta: str) -> tuple:
+    """Extrae palabras clave de la pregunta (normalizadas sin acentos) + sus sinónimos."""
+    preg_limpia = _normalizar_acentos(pregunta.lower())
+    words = [w.strip("?,.¡!¿") for w in preg_limpia.split()
+             if w.strip("?,.¡!¿") not in _STOPWORDS_ES and len(w.strip("?,.¡!¿")) > 1]
+    
+    expanded = list(words)
+    for w in words:
+        for termino, sinonimos in _SINONIMOS_NEURO.items():
+            term_norm = _normalizar_acentos(termino.lower())
+            if w == term_norm:
+                for s in sinonimos:
+                    expanded.append(_normalizar_acentos(s.lower()))
+    return words, list(set(expanded))
+
+
+def _reranking_por_relevancia(pregunta: str, docs_con_score: list, top_n: int = 6) -> list:
+    """
+    Re-ranking de fragmentos recuperados.
+    Penaliza fragmentos que mencionan el término buscado solo de pasada
+    pero cuyo contenido principal es sobre otro tema.
+    """
+    pregunta_lower = _normalizar_acentos(pregunta.lower())
+    tema_principal = None
+    temas_excluir = []
+    # Usamos términos normalizados sin acentos para las comparaciones
+    confusiones = [
+        ("cerebro", ["cerebelo", "cerebeloso", "cerebelosa", "cerebellum"]),
+        ("cerebelo", []),
+        ("hipotalamo", ["hipofisis"]),
+        ("talamo", ["hipotalamo"]),
+    ]
+    for tema, excluidos in confusiones:
+        if tema in pregunta_lower and not any(e in pregunta_lower for e in excluidos):
+            tema_principal = tema
+            temas_excluir = excluidos
+            break
+
+    if not tema_principal:
+        return [doc for doc, _score in docs_con_score[:top_n]]
+
+    scored = []
+    for doc, sim_score in docs_con_score:
+        contenido_lower = _normalizar_acentos(doc.page_content.lower())
+        menciones_tema = contenido_lower.count(tema_principal)
+        menciones_excl = sum(contenido_lower.count(e) for e in temas_excluir)
+
+        if menciones_tema > 0 and menciones_excl == 0:
+            bonus = 0.10
+        elif menciones_tema > menciones_excl:
+            bonus = 0.05
+        elif menciones_tema > 0 and menciones_excl > 0:
+            bonus = -0.05
+        elif menciones_tema == 0 and menciones_excl > 0:
+            bonus = -0.15
+        else:
+            bonus = 0.0
+        scored.append((doc, sim_score + bonus))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [doc for doc, _score in scored[:top_n]]
+
+
+def _busqueda_hibrida(pregunta: str, vector_store: Chroma, k: int = 10) -> list:
+    """
+    Búsqueda híbrida: combina similitud vectorial con coincidencia
+    de palabras clave para recuperar fragmentos que la búsqueda
+    puramente semántica podría no encontrar (ej. 'cerebrum', 'encéfalo').
+    """
+    words_orig, expanded_words = _get_query_keywords(pregunta)
+    query_expandida = _expandir_query(pregunta)
+
+    # 1. Búsqueda vectorial
+    docs_vector = vector_store.similarity_search_with_relevance_scores(
+        query_expandida, k=100
+    )
+    vector_scores = {}
+    for doc, score in docs_vector:
+        vector_scores[doc.page_content] = score
+
+    # 2. Escaneo de toda la base por keywords
+    all_data = vector_store._collection.get(include=["documents", "metadatas"])
+
+    # Palabras clave anatómicas técnicas conocidas normalizadas
+    anatomical_keywords = set()
+    for termino in _SINONIMOS_NEURO.keys():
+        anatomical_keywords.add(_normalizar_acentos(termino.lower()))
+    for sinonimos in _SINONIMOS_NEURO.values():
+        for s in sinonimos:
+            anatomical_keywords.add(_normalizar_acentos(s.lower()))
+
+    scored_docs = []
+    for doc_content, meta in zip(all_data["documents"], all_data["metadatas"]):
+        # Normalizamos el contenido del documento para buscar keywords de forma insensible a tildes
+        doc_lower = _normalizar_acentos(doc_content.lower())
+        
+        # Coincidencia por palabra completa limpiando puntuación (evita falsos positivos como "encefalo" en "mesencefalo")
+        palabras_doc = set(w.strip(".,;:()[]{}-\"'/¿?¡!_") for w in doc_lower.split() if w.strip(".,;:()[]{}-\"'/¿?¡!_"))
+        
+        keyword_score = 0.0
+        for word in expanded_words:
+            if word in palabras_doc:
+                weight = 3.0 if word in anatomical_keywords else 0.5
+                if word in words_orig:
+                    weight *= 2.0
+                keyword_score += weight
+
+        doc_len = len(doc_lower.split())
+        # Penalización por longitud más suave (0.001 en lugar de 0.005) para no descartar párrafos definitorios largos
+        keyword_score = keyword_score / (1 + 0.001 * doc_len) if doc_len > 0 else 0
+        vec_score = vector_scores.get(doc_content, 0.0)
+
+        # Penalizar fragmentos de baja calidad (tablas, índices, bibliografías)
+        lines = doc_content.strip().split("\n")
+        num_lines = len(lines)
+        if num_lines > 0:
+            avg_words_per_line = doc_len / num_lines
+        else:
+            avg_words_per_line = doc_len
+        page_num = meta.get("page", 0)
+        prose_penalty = 1.0
+        # Fragmentos con líneas muy cortas = tabla/diagrama/índice
+        if avg_words_per_line < 4 and num_lines > 5:
+            prose_penalty = 0.3
+        # Páginas de índice/bibliografía (Lange > p.350)
+        src = meta.get("source", "")
+        if "Lange" in src and isinstance(page_num, int) and page_num > 350:
+            prose_penalty = 0.1
+
+        hybrid_score = (0.3 * vec_score + 0.7 * keyword_score) * prose_penalty
+
+        if vec_score > 0 or keyword_score > 0:
+            doc = Document(page_content=doc_content, metadata=meta)
+            scored_docs.append((doc, hybrid_score))
+
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+
+    # 3. Re-ranking temático (eliminar cerebelo cuando preguntan por cerebro, etc.)
+    return _reranking_por_relevancia(pregunta, scored_docs, top_n=k)
+
+
+# ─────────────────────────────────────────────
+# 5b. CONSULTA RAG — 100% LOCAL con Ollama LLM
+# ─────────────────────────────────────────────
+def consultar(pregunta: str, vector_store: Chroma, k: int = 10, nivel: str = "avanzado") -> dict:
     """
     PASOS 5-7 del pipeline RAG:
-    Recuperación vectorial directa → Prompt aumentado → Generación local con Ollama
+    Búsqueda híbrida → Re-ranking → Prompt aumentado → Generación local
     """
-    # PASO 5 — Recuperación directa
-    docs_directos = vector_store.similarity_search(pregunta, k=k)
-
-    # Combinar resultados sin duplicados
-    seen_contents = set()
-    docs = []
-    for doc in docs_directos:
-        content_key = doc.page_content[:100]
-        if content_key not in seen_contents:
-            seen_contents.add(content_key)
-            docs.append(doc)
+    # PASO 5 — Búsqueda híbrida con mínimo 6 fragmentos (óptimo para modelo 3B)
+    k_recuperacion = max(k, 6)
+    docs_contexto = _busqueda_hibrida(pregunta, vector_store, k=k_recuperacion)
 
     # PASO 6 — Construcción del prompt aumentado con citas reales del metadata
     context_parts = []
-    for i, doc in enumerate(docs):
+    for i, doc in enumerate(docs_contexto):
         fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
         pagina = doc.metadata.get("page", "?")
         contenido_limpio = _limpiar_texto_ocr(doc.page_content)
@@ -430,11 +623,10 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "ava
 
     system_instruction = SYSTEM_INSTRUCTION_AVANZADO if nivel.lower() == "avanzado" else SYSTEM_INSTRUCTION_BASICO
 
-    # PASO 7 — Generación LOCAL con Ollama (sin internet, sin cuotas)
+    # PASO 7 — Generación LOCAL con Ollama sin repeat_penalty para términos científicos precisos
     llm = ChatOllama(
         model=OLLAMA_LLM_MODEL,
         temperature=0.0,
-        repeat_penalty=1.3,
         num_predict=800,
         num_ctx=4096,
     )
@@ -451,31 +643,23 @@ def consultar(pregunta: str, vector_store: Chroma, k: int = 5, nivel: str = "ava
     return {
         "pregunta": pregunta,
         "respuesta": texto,
-        "fragmentos": docs,
+        "fragmentos": docs_contexto[:k],  # Devolvemos exactamente k fragmentos al solicitante
         "tokens_contexto_aprox": len(context) // 4,
     }
 
 
-def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avanzado"):
+def stream_consultar(pregunta: str, vector_store, k: int = 10, nivel: str = "avanzado"):
     """
     Igual que consultar() pero devuelve un GENERADOR de tokens.
     Se usa con st.write_stream() en Streamlit para streaming en tiempo real.
     Retorna: (generator, docs, context_tokens)
     """
-    # Recuperación directa
-    docs_directos = vector_store.similarity_search(pregunta, k=k)
-
-    # Combinar sin duplicados
-    seen_contents = set()
-    docs = []
-    for doc in docs_directos:
-        content_key = doc.page_content[:100]
-        if content_key not in seen_contents:
-            seen_contents.add(content_key)
-            docs.append(doc)
+    # Búsqueda híbrida con mínimo 6 fragmentos (óptimo para modelo 3B)
+    k_recuperacion = max(k, 6)
+    docs_contexto = _busqueda_hibrida(pregunta, vector_store, k=k_recuperacion)
 
     context_parts = []
-    for i, doc in enumerate(docs):
+    for i, doc in enumerate(docs_contexto):
         fuente = os.path.basename(doc.metadata.get("source", "desconocido"))
         pagina = doc.metadata.get("page", "?")
         contenido_limpio = _limpiar_texto_ocr(doc.page_content)
@@ -491,7 +675,6 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
     llm = ChatOllama(
         model=OLLAMA_LLM_MODEL,
         temperature=0.0,
-        repeat_penalty=1.3,
         num_predict=800,
         num_ctx=4096,
     )
@@ -505,7 +688,7 @@ def stream_consultar(pregunta: str, vector_store, k: int = 5, nivel: str = "avan
             if chunk.content:
                 yield chunk.content
 
-    return _token_generator(), docs, len(context) // 4
+    return _token_generator(), docs_contexto[:k], len(context) // 4
 
 
 # ─────────────────────────────────────────────
