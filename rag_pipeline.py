@@ -64,7 +64,7 @@ COLLECTION_NAME = "neuroanatomia_cientifica"
 # 2. MODELOS — 100% LOCAL via Ollama
 # ─────────────────────────────────────────────
 OLLAMA_EMBED_MODEL = "nomic-embed-text"
-OLLAMA_LLM_MODEL   = "llama3.2:latest"
+OLLAMA_LLM_MODEL   = "llama3:latest"
 
 embeddings_model = OllamaEmbeddings(
     model=OLLAMA_EMBED_MODEL,
