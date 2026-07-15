@@ -64,7 +64,7 @@ COLLECTION_NAME = "neuroanatomia_cientifica"
 # 2. MODELOS — 100% LOCAL via Ollama
 # ─────────────────────────────────────────────
 OLLAMA_EMBED_MODEL = "nomic-embed-text"
-OLLAMA_LLM_MODEL   = "llama3:latest"
+OLLAMA_LLM_MODEL   = "llama3.2:latest"
 
 embeddings_model = OllamaEmbeddings(
     model=OLLAMA_EMBED_MODEL,
@@ -82,7 +82,8 @@ REGLAS ABSOLUTAS DE EXTRACCIÓN (Cero Conocimiento Externo):
 3. Cualquier dato o aclaración que provenga de tu base de conocimiento interna (preentrenamiento) y no de los fragmentos de texto provistos es considerada una ALUCINACIÓN y es inaceptable.
 4. Si los fragmentos no contienen información que responda de forma directa a la pregunta, debes responder ÚNICAMENTE: "Lo siento, no cuento con esa información." y nada más.
 5. Escribe de forma directa y objetiva. Está TERMINANTEMENTE PROHIBIDO usar lenguaje meta-textual ("el fragmento menciona", "según el archivo", "los documentos indican").
-6. Estructura la respuesta con listas y negritas, pero sé extremadamente conciso y limítate a los hechos literales."""
+6. COMIENZA SIEMPRE con una definición o descripción conceptual breve del término preguntado, combinando de manera lógica la información literal de los fragmentos (por ejemplo, explicando qué es, dónde se ubica y a qué sistema pertenece basándote EXCLUSIVAMENTE en la información literal de los fragmentos, sin agregar conocimiento externo), en lugar de limitarte a listar sus componentes.
+7. Estructura la respuesta con listas y negritas, pero sé extremadamente conciso y limítate a los hechos literales."""
 
 SYSTEM_INSTRUCTION_AVANZADO = SYSTEM_INSTRUCTION_BASICO
 
@@ -178,10 +179,10 @@ def build_vector_store(force_rebuild: bool = False) -> Chroma:
     print(f"  Total de páginas/secciones cargadas: {len(documents)}")
 
     # PASO 2 — Chunking
-    print("\n[PASO 2] Dividiendo en fragmentos (chunk_size=800, overlap=100)...")
+    print("\n[PASO 2] Dividiendo en fragmentos (chunk_size=1800, overlap=250)...")
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100,
+        chunk_size=1800,
+        chunk_overlap=250,
         separators=["\n\n", "\n", ".", " "],
     )
     chunks = splitter.split_documents(documents)
